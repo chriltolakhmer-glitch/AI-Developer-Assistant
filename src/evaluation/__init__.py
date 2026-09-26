@@ -12,8 +12,11 @@ __all__ = [
     "BenchmarkLoader",
     "BenchmarkFreezeMetadata",
     "BenchmarkFreezeUtility",
+    "BenchmarkStatistics",
     "BenchmarkValidationReport",
     "BenchmarkValidator",
+    "calculate_benchmark_statistics",
+    "create_annotation_template",
     "EvaluationReport",
     "QueryEvaluation",
     "RetrievalEvaluator",
@@ -36,6 +39,8 @@ def __getattr__(name: str) -> object:
         if name in {"BenchmarkValidationReport", "BenchmarkValidator"}
         else "src.evaluation.benchmark_freeze"
         if name in {"BenchmarkFreezeMetadata", "BenchmarkFreezeUtility"}
+        else "src.evaluation.benchmark_statistics"
+        if name in {"BenchmarkStatistics", "calculate_benchmark_statistics", "create_annotation_template"}
         else "src.evaluation.retrieval"
         if name in {"EvaluationReport", "QueryEvaluation", "RetrievalEvaluator"}
         else "src.evaluation.metrics"
