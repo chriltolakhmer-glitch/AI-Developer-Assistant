@@ -7,3 +7,9 @@
 Workflow established:
 
 User → ChatGPT → Codex → GitHub → ChatGPT Review
+
+Environment milestone completed:
+
+- GitHub repository connected
+- Solo developer workflow established
+- AI collaboration rules documented
