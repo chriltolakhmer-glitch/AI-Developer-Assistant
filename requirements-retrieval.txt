@@ -1,0 +1,2 @@
+-r requirements-embedding.txt
+faiss-cpu==1.15.1

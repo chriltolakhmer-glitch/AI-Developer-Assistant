@@ -4,6 +4,8 @@
 
 Accepted for the initial prototype on 2026-09-26, contingent on the documented clean-environment installation and behavior smoke check before implementation dependencies are frozen.
 
+The declared Windows/Python 3.14.7 environment passed that gate on 2026-09-27 with FAISS 1.15.1 and NumPy 2.5.3. See [Phase 6.3.1 validation](../research/vector-retrieval-validation.md). Corpus privacy clearance remains a separate open gate.
+
 ## Context
 
 [ADR-005](ADR-005-technology-selection.md) left FAISS versus Chroma open pending a pilot. The prototype compares BM25-only, dense-only, and hybrid retrieval over identical, immutable repository snapshots. Each query is scoped to one repository+commit. The study needs reproducible vector ranks and provenance; it does not need a general metadata-rich vector database.

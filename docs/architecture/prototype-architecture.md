@@ -1,6 +1,6 @@
 # Prototype Architecture
 
-**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner, Python AST parser, semantic code chunker, and preprocessing pipeline validator are implemented; retrieval and metric-evaluation components remain planned. See [scanner-design.md](scanner-design.md), [ast-parser-design.md](ast-parser-design.md), [chunker-design.md](chunker-design.md), and [pipeline-validation.md](../research/pipeline-validation.md). Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
+**Status:** Phase 3 blueprint, incrementally implemented through Phase 6.3.1. Scanner, AST parser, chunker, preprocessing validation, local chunk embeddings, and FAISS vector-query retrieval are implemented. BM25, fusion, text-query encoding, and metric evaluation remain planned. See [embedding-implementation.md](embedding-implementation.md), [vector-retrieval-design.md](vector-retrieval-design.md), and [pipeline-validation.md](../research/pipeline-validation.md). Corpus execution remains subject to privacy clearance. Refines [system-architecture-v1.md](system-architecture-v1.md) into components scoped for [experiment-design.md](../research/experiment-design.md).
 
 ## Scope of This Prototype
 
