@@ -17,7 +17,7 @@ The orchestrator never modifies the indexed source tree and treats retrieval qua
 |---|---|
 | Repository Analyzer / Scanner | Resolve a pinned commit, enumerate eligible files via allow/ignore rules, record identity and content hashes. |
 | Document Processor | Read files, normalize text, attach language/path/hash metadata. |
-| AST Parser | Parse supported languages (initially Python) via Tree-sitter; extract functions/classes/methods; provide labeled text fallback. |
+| AST Parser | Parse the initial Python-only scope via the standard-library `ast` module; extract modules, classes, functions/methods, imports, decorators and exact source spans. Syntax failures are surfaced for a later labeled fallback decision. |
 | Chunking Engine | Produce AST-aware chunks with stable source spans; handle oversized nodes deterministically; version chunking config. |
 | Embedding Service | Generate fixed-model embeddings for chunks and queries; log failures; enforce re-index on model change. |
 | Vector Database | Persist chunk vectors and metadata; return nearest candidates. |

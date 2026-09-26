@@ -1,6 +1,6 @@
 # Prototype Architecture
 
-**Status:** Phase 3 blueprint — first concrete implementation architecture. No source code exists yet; this document precedes and governs the initial `src/` implementation. Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
+**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner is implemented under [scanner-design.md](scanner-design.md), and the Python AST parser is implemented under [ast-parser-design.md](ast-parser-design.md); downstream retrieval components remain planned. Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
 
 ## Scope of This Prototype
 
@@ -16,8 +16,8 @@ This architecture covers only what is needed to run the **RQ1 retrieval-only eva
 
 ### Python AST Parser
 
-- **Responsibility:** Parse each eligible Python file using Python's built-in `ast` module (see [ADR-005](../decisions/ADR-005-technology-selection.md) for the parser decision), extracting functions, methods and classes with exact source line spans.
-- **Output:** Per-file symbol list (name, kind, span, parent class if any); parse-failure log with file and error, so failures are visible rather than silently skipped.
+- **Responsibility:** Parse each eligible Python file using Python's built-in `ast` module (see [ADR-005](../decisions/ADR-005-technology-selection.md) and [ADR-010](../decisions/ADR-010-ast-parser.md)), extracting module identity, classes, functions, methods, imports, decorators and exact source line spans.
+- **Output:** Per-file structured module record with qualified names and source ranges; syntax failures are surfaced with file and location, not silently skipped.
 - **Fallback:** Files that fail to parse are still eligible for a labeled line-window fallback chunk, clearly flagged as non-AST.
 
 ### Code Chunker
