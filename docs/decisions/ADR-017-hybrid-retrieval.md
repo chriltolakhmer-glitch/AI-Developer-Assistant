@@ -4,6 +4,8 @@
 
 Accepted for Phase 6.3 on 2026-09-27. Phase 6.3.1 implements the dense vector component only. Frozen-corpus execution remains conditional on the outstanding privacy review.
 
+Phase 6.3.2 adds the lexical component under [ADR-018](ADR-018-bm25-retrieval.md). RRF execution remains unimplemented; the Phase 6.3.1 scope described below is historical.
+
 ## Context
 
 The thesis compares dense-only, lexical-only, and AST-aware hybrid retrieval over identical pinned chunks and queries. Dense similarity and lexical identifier matching provide complementary signals, but their raw score scales are not directly comparable. The Phase 4 choices in ADR-007 and the technology selection record already specify exact FAISS search and fixed RRF parameters; this decision makes the hybrid implementation sequence explicit.

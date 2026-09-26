@@ -1,6 +1,6 @@
 # Prototype Architecture
 
-**Status:** Phase 3 blueprint, incrementally implemented through Phase 6.3.1. Scanner, AST parser, chunker, preprocessing validation, local chunk embeddings, and FAISS vector-query retrieval are implemented. BM25, fusion, text-query encoding, and metric evaluation remain planned. See [embedding-implementation.md](embedding-implementation.md), [vector-retrieval-design.md](vector-retrieval-design.md), and [pipeline-validation.md](../research/pipeline-validation.md). Corpus execution remains subject to privacy clearance. Refines [system-architecture-v1.md](system-architecture-v1.md) into components scoped for [experiment-design.md](../research/experiment-design.md).
+**Status:** Phase 3 blueprint, incrementally implemented through Phase 6.3.2. Scanner, AST parser, chunker, preprocessing validation, local chunk embeddings, FAISS vector-query retrieval, and BM25 text-query retrieval are implemented. Fusion, dense text-query encoding, and metric evaluation remain planned. See [embedding-implementation.md](embedding-implementation.md), [vector-retrieval-design.md](vector-retrieval-design.md), [bm25-retrieval-design.md](bm25-retrieval-design.md), and [pipeline-validation.md](../research/pipeline-validation.md). Corpus execution remains subject to privacy clearance. Refines [system-architecture-v1.md](system-architecture-v1.md) into components scoped for [experiment-design.md](../research/experiment-design.md).
 
 ## Scope of This Prototype
 

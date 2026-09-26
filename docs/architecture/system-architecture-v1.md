@@ -1,6 +1,6 @@
 # System Architecture v1
 
-**Status:** Initial blueprint (Phase 1), incrementally implemented through Phase 6.3.1. Scanner, Python AST parser, semantic chunker, preprocessing validator, local chunk embeddings, and [FAISS vector-query retrieval](vector-retrieval-design.md) now exist. BM25, fusion, text-query encoding, and evaluation remain planned; corpus execution still requires privacy clearance.
+**Status:** Initial blueprint (Phase 1), incrementally implemented through Phase 6.3.2. Scanner, Python AST parser, semantic chunker, preprocessing validator, local chunk embeddings, [FAISS vector-query retrieval](vector-retrieval-design.md), and [BM25 text-query retrieval](bm25-retrieval-design.md) now exist. Fusion, dense text-query encoding, and evaluation remain planned; corpus execution still requires privacy clearance.
 
 ## Architecture Overview
 
