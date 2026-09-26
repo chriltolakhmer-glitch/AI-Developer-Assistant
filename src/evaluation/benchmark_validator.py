@@ -133,9 +133,13 @@ class BenchmarkValidator:
                     or not _FULL_SHA1_PATTERN.fullmatch(case.commit_sha)):
                 issues.add("case_identity_invalid")
                 case_valid = False
+                case_identity = None
             elif snapshots.get(case.repository_id) != case.commit_sha.lower():
                 issues.add("snapshot_mismatch")
                 case_valid = False
+                case_identity = (case.repository_id, case.commit_sha.lower())
+            else:
+                case_identity = (case.repository_id, case.commit_sha.lower())
 
             if not isinstance(case.relevance, tuple) or not case.relevance:
                 issues.add("relevance_invalid")
@@ -163,7 +167,7 @@ class BenchmarkValidator:
                 if identity is None:
                     issues.add("missing_chunk_id")
                     case_valid = False
-                elif identity != (case.repository_id, case.commit_sha.lower()):
+                elif case_identity is not None and identity != case_identity:
                     issues.add("relevant_chunk_snapshot_mismatch")
                     case_valid = False
 
