@@ -1,6 +1,6 @@
 # Prototype Architecture
 
-**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner, Python AST parser, and semantic code chunker are implemented under [scanner-design.md](scanner-design.md), [ast-parser-design.md](ast-parser-design.md), and [chunker-design.md](chunker-design.md); retrieval and evaluation components remain planned. Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
+**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner, Python AST parser, semantic code chunker, and preprocessing pipeline validator are implemented; retrieval and metric-evaluation components remain planned. See [scanner-design.md](scanner-design.md), [ast-parser-design.md](ast-parser-design.md), [chunker-design.md](chunker-design.md), and [pipeline-validation.md](../research/pipeline-validation.md). Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
 
 ## Scope of This Prototype
 
@@ -18,13 +18,19 @@ This architecture covers only what is needed to run the **RQ1 retrieval-only eva
 
 - **Responsibility:** Parse each eligible Python file using Python's built-in `ast` module (see [ADR-005](../decisions/ADR-005-technology-selection.md) and [ADR-010](../decisions/ADR-010-ast-parser.md)), extracting module identity, classes, functions, methods, imports, decorators and exact source line spans.
 - **Output:** Per-file structured module record with qualified names and source ranges; syntax failures are surfaced with file and location, not silently skipped.
-- **Fallback:** Files that fail to parse are still eligible for a labeled line-window fallback chunk, clearly flagged as non-AST.
+- **Failure handling:** Syntax failures are counted and reported by pipeline validation. The current implementation does not emit fallback chunks; any fallback policy is deferred and must be explicit.
 
 ### Code Chunker
 
 - **Responsibility:** Convert each parsed module, class, function, and method into a semantic source chunk carrying repository ID, commit, file path, qualified name/type, exact line span, and source text.
 - **Output:** An in-memory, deterministic chunk inventory intended to be shared by future embedding and lexical retrieval pipelines.
 - **Constraint:** Same repository, commit, AST, and source produce the same stable chunk IDs. Parent/child chunks overlap intentionally; fixed-size splitting and persistence are not implemented in this milestone.
+
+### Pipeline Validation
+
+- **Responsibility:** Run the scanner → AST parser → chunker over each approved local, SHA-pinned repository checkout before implementing retrieval. Verify expected file/LOC counts, parser success/failure accounting, repeated parse/chunk equality, and source-tree read-only behavior.
+- **Output:** Aggregate per-repository JSON and Markdown reports written outside this Git repository and all corpus checkouts. Reports contain counts and chunk-size distributions, not source text or per-file paths.
+- **Constraint:** Local-only; no clone/fetch, embeddings, vector database, LLM, UI, or chatbot. The required secret/privacy audit is separate and remains a gate before indexing.
 
 ### Embedding Generator
 
@@ -60,6 +66,7 @@ This architecture covers only what is needed to run the **RQ1 retrieval-only eva
 
 ```text
 Repository Scanner -> Python AST Parser -> Code Chunker
+                                              -> Pipeline Validation -> aggregate preprocessing report
                                               |-> Embedding Generator -> Vector Index
                                               |-> BM25 Index
 Code Chunker (chunk store) + Vector Index + BM25 Index -> Hybrid Retriever

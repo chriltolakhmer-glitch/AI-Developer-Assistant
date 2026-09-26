@@ -1,6 +1,6 @@
 # System Architecture v1
 
-**Status:** Initial blueprint (Phase 1). No implementation exists yet; this document precedes and governs `src/`.
+**Status:** Initial blueprint (Phase 1), incrementally implemented through Phase 5.4. Scanner, Python AST parser, semantic chunker, and preprocessing validator now exist; retrieval/evaluation infrastructure remains planned.
 
 ## Architecture Overview
 
@@ -19,6 +19,7 @@ The orchestrator never modifies the indexed source tree and treats retrieval qua
 | Document Processor | Read files, normalize text, attach language/path/hash metadata. |
 | AST Parser | Parse the initial Python-only scope via the standard-library `ast` module; extract modules, classes, functions/methods, imports, decorators and exact source spans. Syntax failures are surfaced for a later labeled fallback decision. |
 | Chunking Engine | Produce AST-aware chunks with stable source spans; handle oversized nodes deterministically; version chunking config. |
+| Pipeline Validation | Before retrieval implementation, verify pinned scanner/parser/chunker outputs, corpus count reconciliation, parse coverage, determinism, and read-only behavior; write aggregate reports outside the source tree. |
 | Embedding Service | Generate fixed-model embeddings for chunks and queries; log failures; enforce re-index on model change. |
 | Vector Database | Persist chunk vectors and metadata; return nearest candidates. |
 | Lexical/BM25 Index | Persist tokenized chunk text for keyword/symbol retrieval. |
@@ -46,8 +47,9 @@ The following Phase 1 candidates have since been narrowed by Phase 4: Python sta
 Pinned repository snapshot
   -> Scan & filter
   -> Document read & normalize (+ metadata)
-  -> AST parse (fallback: text)
+  -> AST parse (syntax failures reported; fallback policy deferred)
   -> AST-aware chunking
+  -> Pipeline validation (pinned revisions, counts, parse coverage, repeatability)
   -> Embedding generation
   -> Vector index + Lexical index (source metadata retained)
 ```
