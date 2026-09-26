@@ -1,6 +1,6 @@
 # Prototype Architecture
 
-**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner is implemented under [scanner-design.md](scanner-design.md), and the Python AST parser is implemented under [ast-parser-design.md](ast-parser-design.md); downstream retrieval components remain planned. Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
+**Status:** Phase 3 blueprint, incrementally implemented in Phase 5. The read-only scanner, Python AST parser, and semantic code chunker are implemented under [scanner-design.md](scanner-design.md), [ast-parser-design.md](ast-parser-design.md), and [chunker-design.md](chunker-design.md); retrieval and evaluation components remain planned. Refines [system-architecture-v1.md](system-architecture-v1.md) into buildable components scoped for the retrieval-evaluation prototype defined in [experiment-design.md](../research/experiment-design.md).
 
 ## Scope of This Prototype
 
@@ -22,9 +22,9 @@ This architecture covers only what is needed to run the **RQ1 retrieval-only eva
 
 ### Code Chunker
 
-- **Responsibility:** Convert parsed symbols (or fallback line windows) into bounded, metadata-carrying chunks: repository ID, commit, file path, symbol name/kind, exact line span, and chunk text.
-- **Output:** A chunk store (one record per chunk) shared by both the embedding pipeline and the lexical index, so retrieval strategies are compared on identical chunk units.
-- **Constraint:** Deterministic — the same input produces the same chunks and IDs on re-run, so re-indexing does not create duplicates.
+- **Responsibility:** Convert each parsed module, class, function, and method into a semantic source chunk carrying repository ID, commit, file path, qualified name/type, exact line span, and source text.
+- **Output:** An in-memory, deterministic chunk inventory intended to be shared by future embedding and lexical retrieval pipelines.
+- **Constraint:** Same repository, commit, AST, and source produce the same stable chunk IDs. Parent/child chunks overlap intentionally; fixed-size splitting and persistence are not implemented in this milestone.
 
 ### Embedding Generator
 
