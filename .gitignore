@@ -4,3 +4,5 @@ node_modules/
 bin/
 obj/
 .idea/
+__pycache__/
+*.py[cod]
