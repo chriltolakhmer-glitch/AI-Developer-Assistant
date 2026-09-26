@@ -1,7 +1,7 @@
 # Phase 5.4 — Scanner, Parser, and Chunker Pipeline Validation
 
 **Review date:** 2026-09-26  
-**Status:** Runner and integration tests implemented; approved corpus validation is **blocked** because the nine pinned checkouts are not available locally. No repository was cloned or fetched.
+**Status:** The runner and integration tests were implemented. The initial 2026-09-26 corpus attempt, documented below, was blocked because no pinned checkout was local at that time; this historical result was superseded by the 2026-09-27 **9/9 pass** in [Phase 5.4.1 corpus checkout validation](corpus-checkout-validation.md). The later run leaves privacy clearance open and does not authorize embeddings or indexing.
 
 ## Purpose and scope
 
