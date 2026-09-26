@@ -34,7 +34,7 @@ This architecture covers only what is needed to run the **RQ1 retrieval-only eva
 
 ### Vector Index
 
-- **Responsibility:** Persist chunk vectors with metadata and return nearest-neighbor candidates for a query vector (see [ADR-005](../decisions/ADR-005-technology-selection.md) for FAISS vs. Chroma).
+- **Responsibility:** Persist normalized chunk vectors in a per-repository+commit FAISS `IndexFlatIP`, resolve results through the deterministic chunk-ID/provenance sidecar, and return exact cosine-ranked candidates (see [ADR-007](../decisions/ADR-007-vector-index-selection.md)).
 - **Output:** Ranked candidate chunk IDs with similarity/distance scores for the dense-only baseline and as one input to the hybrid retriever.
 
 ### BM25 Index

@@ -1,6 +1,6 @@
 # Repository Corpus Selection
 
-**Status:** Phase 3 blueprint — no implementation exists yet. Operationalizes [dataset-design.md](dataset-design.md) with concrete candidate repositories.
+**Status:** Phase 3 shortlist template superseded by the Phase 4 screened and pinned result in [repository-corpus-final.md](repository-corpus-final.md). Retained for criteria and selection rationale; its placeholder table is not the selected corpus.
 
 ## Repository Selection Criteria
 
@@ -30,7 +30,7 @@ Sizing is based on eligible Python LOC after a fixed ignore/filter policy (vendo
 
 ## Candidate Repositories
 
-**Status: not yet finalized.** The following is a candidate shortlist structure to be populated and pinned during the pilot step of Phase 3/4. No commit SHAs are pinned yet — this table is a placeholder to be completed before annotation begins, not a claim that these repositories have been vetted.
+**Historical Phase 3 placeholder (superseded):** The table below records the shortlist state before the Phase 4 screening. It is not the active corpus; use [repository-corpus-final.md](repository-corpus-final.md) for the selected repositories and their measured evidence.
 
 | Category | Candidate repository (placeholder) | Domain | License to verify | Pinned commit | Status |
 |---|---|---|---|---|---|
@@ -48,9 +48,9 @@ Before a candidate moves from "Candidate" to "Selected," it must pass all seven 
 
 ## Selection Justification
 
-- **Why a placeholder table instead of pre-selected repositories:** Selecting real candidates requires verifying license terms, absence of secrets, and actual eligible-LOC counts per repository — actions that involve external lookups and screening, not architecture/documentation work. Committing to specific repositories before that screening risks locking in a non-compliant or unsuitable corpus.
+- **Historical Phase 3 rationale for a placeholder table:** Repository selection required external license and LOC screening, which Phase 3 had not performed. Phase 4 has now completed the documented screening; remaining pre-index checks are listed in [repository-corpus-final.md](repository-corpus-final.md).
 - **Why three size strata of three repositories each:** Matches the sample size proposed in [dataset-design.md](dataset-design.md) — large enough to observe size-related retrieval/cost effects, small enough to be annotated (108 questions total) by a single researcher within thesis timelines.
 - **Why domain diversity is a hard criterion:** Reduces the risk that observed retrieval effects are specific to one coding style or framework rather than generalizable within the Python-only scope.
 - **Why exclude the three previously analyzed assistant repositories from the primary sample:** They were the subject of the prior static analyses that motivated this thesis; using them as the evaluation corpus would bias the benchmark toward systems whose limitations already informed the research design.
 
-**Next action (not part of this document's scope):** Screen and pin actual candidate repositories against the criteria above, populate this table, and record the screening log before benchmark annotation begins.
+**Next action:** Complete the pre-index secret/privacy audit and scanner-manifest verification documented in [repository-corpus-final.md](repository-corpus-final.md) before annotation or indexing.

@@ -33,11 +33,8 @@ The orchestrator never modifies the indexed source tree and treats retrieval qua
 
 ## Technology Candidates
 
-These are candidates to evaluate during Phase 2, not final decisions:
+The following Phase 1 candidates have since been narrowed by Phase 4: Python standard-library `ast` is selected for parsing; local `sentence-transformers/all-MiniLM-L6-v2` is selected at the immutable revision documented in [technology-selection-final.md](../research/technology-selection-final.md); and CPU FAISS `IndexFlatIP` is selected under [ADR-007](../decisions/ADR-007-vector-index-selection.md), subject to the pre-implementation environment smoke check.
 
-- **Parsing:** Tree-sitter (Python grammar).
-- **Embeddings:** Local SentenceTransformer model (e.g., `all-MiniLM-L6-v2`) for reproducibility; optionally a hosted embedding API for comparison.
-- **Vector index:** FAISS or Chroma (decide based on filtering/metadata needs).
 - **Lexical index:** BM25 (e.g., `rank-bm25` or an existing search library).
 - **Backend:** Python (FastAPI) to align with the parsing/embedding ecosystem.
 - **LLM (secondary path):** A single fixed, declared model/provider (local or hosted) — chosen once the retrieval study is stable.

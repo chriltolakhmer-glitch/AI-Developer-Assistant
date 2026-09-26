@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (Phase 3 blueprint) — candidates recorded with trade-offs; final pick deferred to pilot testing before `src/` implementation begins.
+**Status:** Superseded for final Phase 4 choices by [ADR-007](ADR-007-vector-index-selection.md) and [technology-selection-final.md](../research/technology-selection-final.md). The Python `ast` and local embedding defaults are confirmed; the earlier FAISS/Chroma deferral is closed by ADR-007.
 
 ## Context
 
@@ -19,13 +19,13 @@ Proposed (Phase 3 blueprint) — candidates recorded with trade-offs; final pick
   - Since this thesis is Python-only by scope decision, the multi-language generalization benefit of Tree-sitter is not currently needed, and avoiding an extra dependency reduces reproducibility risk (fewer pinned versions to track).
 - **Leaning:** Python `ast` for the initial prototype; revisit only if multi-language scope is added in future work.
 
-### Vector Index: FAISS vs. Chroma
+### Vector Index: FAISS vs. Chroma (Phase 3 comparison; superseded)
 
 - **Trade-offs:**
   - **FAISS (`IndexFlatL2` or similar):** minimal dependency footprint, well-understood exact/approximate search, no built-in metadata filtering — chunk metadata must be tracked in a separate sidecar structure (as observed in the analyzed `codebase-rag` project).
   - **Chroma:** persistent collection with built-in metadata storage and cosine-similarity search, simplifying repository/commit-scoped filtering, at the cost of an additional service/library dependency and less direct control over index internals.
   - For a controlled, single-machine research evaluation with modest corpus size (nine repositories, small/medium/large strata), both are computationally adequate; the deciding factor is metadata-handling convenience and reproducibility of persisted state across evaluation runs, not raw performance at this scale.
-- **Leaning:** Decide during the pilot step by testing metadata-filtering needs (e.g., isolating candidates per repository/commit) against both libraries with a small sample repository; not finalized in this ADR.
+- **Phase 3 leaning:** Decide during the pilot step by testing metadata-filtering needs (e.g., isolating candidates per repository/commit) against both libraries with a small sample repository. This deferral is now resolved: see [ADR-007](ADR-007-vector-index-selection.md) for the accepted FAISS decision.
 
 ### Embedding: Local model vs. API model
 
@@ -38,14 +38,14 @@ Proposed (Phase 3 blueprint) — candidates recorded with trade-offs; final pick
 
 ## Decision
 
-Record all three candidates and their trade-offs now; do not finalize the vector index choice until a short pilot (one small repository) is run to compare FAISS and Chroma on metadata-filtering ergonomics. The parser and embedding leanings (Python `ast`, local SentenceTransformer) are adopted as working defaults for the prototype, subject to revision if the pilot reveals a blocking limitation.
+The Phase 3 decision was to record candidates, adopt Python `ast` and local SentenceTransformers as working defaults, and defer the vector index pending a pilot. Phase 4 closes that deferral: Python `ast` and the pinned local embedding selection are adopted, and FAISS is selected under [ADR-007](ADR-007-vector-index-selection.md), subject to its pre-implementation environment smoke check.
 
 ## Reason
 
-Committing to Python `ast` and a local embedding model now maximizes reproducibility and minimizes external dependencies/costs for a solo-researcher thesis, consistent with the reproducibility non-functional requirement in [system-requirements.md](../requirements/system-requirements.md). The vector index choice is deliberately left open because its impact is implementation ergonomics rather than a research-validity concern, and a short pilot is cheaper than committing prematurely.
+The original Phase 3 rationale for Python `ast` and local embeddings remains valid: they reduce dependencies and keep source local. The vector-index trade-off has since been resolved for the bounded evaluation; see [ADR-007](ADR-007-vector-index-selection.md) and [technology-selection-final.md](../research/technology-selection-final.md) for the FAISS rationale and constraints.
 
 ## Consequences
 
-- Any implementation in `src/` must record the exact `ast` module behavior (Python version), embedding model name/version, and — once chosen — the vector index library/version, per the reproducibility requirements.
-- A future ADR should record the final vector index decision once the pilot is complete, referencing this ADR.
+- Any implementation in `src/` must record the exact `ast` behavior (Python version), pinned embedding model/revision, and vector-index/library version and configuration.
+- The final vector-index choice and its installation gate are recorded in [ADR-007](ADR-007-vector-index-selection.md); the complete configuration is in [technology-selection-final.md](../research/technology-selection-final.md).
 - If multi-language support is ever added (a scope change requiring its own ADR), the parser decision must be revisited, since `ast` is Python-specific.
