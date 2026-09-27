@@ -1,16 +1,16 @@
 # Phase 8.11 — Pilot Privacy Remediation Plan
 
 **Plan date:** 2026-09-27
-**Phase 8.13 evidence check date:** 2026-09-27
+**Phase 8.14 evidence check date:** 2026-09-27
 **Repository:** `python-humanize/humanize`
 **Pinned snapshot:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
-**Thesis baseline:** `fec3fbfdc92fc4f11bc21aa41e5b0c5c32bcbbb6`
+**Thesis baseline:** `a9ae961cc566ee75a0978827008e2be5df5ea7fd`
 **Privacy status:** **NOT APPROVED — annotation remains blocked**
 **Designated reviewer (user-provided):** Alot, Project Owner / Thesis Researcher
 
 ## Scope and safety boundary
 
-This plan closes evidence gaps only. Phases 8.11–8.13 have not reopened or transmitted pilot source code, created benchmark questions, annotated chunks, generated a chunk inventory, or run retrieval/evaluation experiments. Phases 8.12 and 8.13 did not use pilot source with AI services. Completed review forms must be kept in an approved controlled local research-data area; commit only blank templates, policy-level records, and non-sensitive aggregate status. Do not place source excerpts, candidate values, line-level personal data, or per-file inventory in this Git repository.
+This plan closes evidence gaps only. Phases 8.11–8.14 have not reopened or transmitted pilot source code, created benchmark questions, annotated chunks, generated a chunk inventory, or run retrieval/evaluation experiments. Phases 8.12–8.14 did not use pilot source with AI services. Completed review forms must be kept in an approved controlled local research-data area; commit only blank templates, policy-level records, and non-sensitive aggregate status. Do not place source excerpts, candidate values, line-level personal data, or per-file inventory in this Git repository.
 
 Under [ADR-008](../decisions/ADR-008-source-code-privacy.md), hosted LLM/chat and other services that receive source or source-derived research data are **not allowed** for the primary study. Phase 8.10 recorded that source content was made available to an AI analysis agent, while service-side handling and data residency are unknown. Treat this as a potential policy deviation requiring assessment; do not send additional pilot source to AI or hosted services.
 
@@ -35,9 +35,9 @@ This is a status update, not closure evidence or a human attestation:
 - **AI policy:** [the Phase 8.12 policy decision](pilot-ai-processing-policy-decision.md) records hosted AI processing of pilot source/source-derived data as **NOT ALLOWED**, following ADR-008 and the current instruction. It does not resolve the prior Phase 8.10 AI-agent handling event, whose service-side processing remains unknown.
 - **Final approval:** no human-signed review package or authorized approval was provided. Overall status remains **NOT APPROVED**.
 
-## Phase 8.13 evidence receipt
+## Phase 8.14 evidence receipt
 
-The project owner stated on 2026-09-27 that the human reviews were completed locally and identified the previously used Phase 8 pilot evidence folder. A filename/metadata-only listing of that folder found no completed candidate disposition, notice/license, handling-controls, or prior-AI-processing assessment form; no file contents or pilot source were opened. The folder ACL still inherits access for `BUILTIN\Users` with read/execute and create/append rights. Consequently, the stated completion is recorded as **reported but not evidenced here**; no remediation row is closed. Alot must provide the completed attestations from an appropriately restricted location, without sending source or candidate details through chat.
+The project owner stated on 2026-09-27 that the human reviews were completed locally and identified the previously used Phase 8 pilot evidence folder. A filename/metadata-only listing of that folder found only `annotation-notes.md`, `eligible-file-manifest.json`, `pilot-benchmark-draft.json`, and `validation-report.md`; no candidate disposition, notice/license, handling-controls, or prior-AI-processing assessment form was present by filename. No file contents or pilot source were opened. The folder ACL still inherits access for `BUILTIN\Users` with read/execute and create/append rights. Consequently, the stated completion is **reported but not evidenced here**; no remediation row is closed. Alot must provide the completed attestations from an appropriately restricted location, without sending source or candidate details through chat.
 
 ## Required evidence package
 

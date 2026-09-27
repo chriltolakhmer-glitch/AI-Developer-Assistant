@@ -1,9 +1,9 @@
-# Phase 8.13 — Human Privacy Review Evidence Status
+# Phase 8.14 — Local Privacy Evidence Package Status
 
 **Approval decision date:** 2026-09-27
 **Phase 8.10 evidence review date:** 2026-09-27
-**Phase 8.13 documentation update date:** 2026-09-27
-**Thesis repository baseline:** `fec3fbfdc92fc4f11bc21aa41e5b0c5c32bcbbb6`
+**Phase 8.14 evidence check date:** 2026-09-27
+**Thesis repository baseline:** `a9ae961cc566ee75a0978827008e2be5df5ea7fd`
 **Pilot repository:** `python-humanize/humanize`
 **Required snapshot:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
 **Reviewer name (user-designated):** Alot
@@ -38,25 +38,31 @@ Created the [privacy remediation plan](privacy-remediation-plan.md) and four bla
 
 These documents assign proposed owners and specify required evidence; **they are templates, not completed reviews or attestations**. No candidate disposition, human notice review, access-control remediation, AI-processing policy disposition, full-history scan evidence, or approval sign-off was supplied in Phase 8.11. The privacy decision therefore remains **NOT APPROVED**.
 
-## Phase 8.13 evidence status
+## Phase 8.14 evidence status
 
-Phase 8.13 was documentation-only. **No pilot source code was accessed or submitted to AI services during this phase.** The available evidence does not permit completion of the requested human attestations:
+Phase 8.14 was documentation-only. **No pilot source code was accessed or submitted to AI services during this phase.** No human review documents were attached for review; filename/metadata inspection of the previously identified evidence folder found no completed forms. The available evidence does not permit completion of the requested human attestations:
 
-| Review | Phase 8.13 result | Remaining requirement |
+| Review | Phase 8.14 result | Remaining requirement |
 |---|---|---|
-| Candidate data disposition | Not verified. The prior aggregate screen records three formatted-number candidates but does not contain approved file/line locations, classifications, reviewer decisions, or justifications. No completed disposition form was found in the checked folder; no source was reopened. | Alot must inspect the candidates locally, fill the [candidate disposition form](templates/privacy/candidate-data-disposition-template.md) in a properly restricted location, record classifications/decisions/justifications, and attest/date it. Keep candidate locations and values out of Git and chat. |
-| Notice/license review | Not verified as a human attestation. The Phase 8.10 filename/header inventory and root MIT-license observation remain preliminary. No completed review form was found in the checked folder; the template remains blank. | Alot must verify applicable LICENSE/LICENCE, NOTICE, COPYRIGHT, attribution and eligible-file conditions locally, record obligations/exclusions, and sign/date the completed form; seek legal/owner review if required. |
-| Handling controls | Not attested. The checked folder inherits `BUILTIN\Users` read/execute and create/append rights; no access changes or lifecycle attestations were made. No completed handling form was found. | Restrict access through an authorized administrator, then record effective permissions, owner, storage, external-processing decision, encryption/backups, retention, deletion, and sign/date the form. Assess the prior AI-agent source access. |
-| AI processing policy and prior event | [Phase 8.12 policy decision](pilot-ai-processing-policy-decision.md) records hosted AI processing of pilot source/source-derived data as **NOT ALLOWED** under ADR-008 and the current instruction. No completed retrospective assessment was found in the checked folder. | The decision does not resolve the prior Phase 8.10 AI-agent handling event. Alot and the appropriate privacy authority must assess service-side processing, residency, retention, and policy disposition; no exception is approved. |
+| Candidate data disposition | No human evidence document was provided. The prior aggregate screen records three formatted-number candidates but does not contain approved file/line locations, classifications, decisions, or justifications. The known folder listing contained no completed form; its contents were not opened and no source was reopened. | Alot must complete and attest the [candidate disposition form](templates/privacy/candidate-data-disposition-template.md) locally, recording each candidate's type, classification, decision, justification, reviewer, and date in an appropriately restricted record. Keep candidate locations and values out of Git and chat. |
+| Notice/license review | No human evidence document was provided. The Phase 8.10 filename/header inventory and root MIT-license observation remain preliminary. The known folder listing contained no completed review form. | Alot must verify applicable LICENSE/LICENCE, NOTICE, COPYRIGHT, attribution and eligible-file conditions locally, record obligations/exclusions, and sign/date the completed form; seek legal/owner review if required. |
+| Handling controls | No completed attestation was provided. The known folder was previously observed to inherit `BUILTIN\Users` read/execute and create/append rights. The folder listing contained no completed form; no updated permissions/lifecycle evidence was provided. | Restrict access through an authorized administrator, then attest effective permissions, storage, owner, external-processing decision, encryption/backups, retention and deletion. Assess the prior AI-agent source access. |
+| AI processing policy and prior event | [Phase 8.12 policy decision](pilot-ai-processing-policy-decision.md) records hosted AI processing of pilot source/source-derived data as **NOT ALLOWED** under ADR-008. No completed retrospective assessment document was provided or found by filename in the known folder. | Alot and the appropriate privacy authority must assess service-side processing, residency, retention, deletion, and policy disposition for the Phase 8.10 AI-agent handling event; no exception or retrospective approval is documented. |
 | History and final approval | The checkout was previously verified shallow with one reachable commit; full history was not reviewed. No new scan, risk acceptance, signed review package, or authorized final decision was provided. | Record scanner provenance and full available history coverage, or obtain authorized written acceptance of the limitation; then submit the complete evidence package for a signed, attributable approval decision. |
 
-The [privacy remediation plan](privacy-remediation-plan.md) tracks the assigned actions and closure evidence. Blank templates and a policy-level `NOT ALLOWED` decision are not evidence that the candidate, notice, handling, or final approval checks have been completed.
+The [privacy remediation plan](privacy-remediation-plan.md) tracks the assigned actions and closure evidence. Blank templates and a policy-level `NOT ALLOWED` decision are not evidence that the candidate, notice, handling, prior-processing, or final approval checks have been completed.
 
 ## Phase 8.13 evidence receipt
 
 On 2026-09-27, the project owner reported that the human privacy reviews had been completed locally and identified the previously used Phase 8 pilot evidence folder. A filename/metadata-only check of that folder found no completed candidate-disposition, notice/license, handling-controls, or prior-AI-processing assessment forms. The folder's inherited ACL grants `BUILTIN\Users` read/execute and create/append access; it is not demonstrated to be restricted to the reviewer. No file contents or pilot source code were opened for this check, and no pilot source was submitted to AI services in Phase 8.13.
 
 The report of local completion is recorded as an **unverified statement**, not as the review evidence itself. No candidate-level locations or decisions, notice-review findings, handling attestation, previous AI-processing assessment, or signed approver decision were provided. Therefore no human-review gate can be marked complete and the status remains **NOT APPROVED**. Before storing sensitive completed forms in that folder, an authorized administrator should establish and verify least-privilege access; keep candidate values and line-level details out of Git and chat.
+
+## Phase 8.14 evidence review
+
+No human evidence documents or completed forms were attached or otherwise provided for review in this phase. A filename/metadata-only listing of the previously identified `C:\Apps\Temp\Phase8\benchmark\pilot\python-humanize` evidence folder found only `annotation-notes.md`, `eligible-file-manifest.json`, `pilot-benchmark-draft.json`, and `validation-report.md`; no candidate-disposition, notice/license, handling-controls, or prior-AI-processing assessment document was present by filename. The contents of these files were not opened. No pilot source contents were accessed, and no repository data was sent to AI services in Phase 8.14.
+
+Accordingly, the human-reported completion remains **unverified**. Candidate disposition, notice/license review, handling-controls attestation, and retrospective assessment of the Phase 8.10 AI processing are all **NOT EVIDENCED / OPEN**. The folder was last observed to inherit broad `BUILTIN\Users` read/execute and create/append rights; no new ACL assessment or control-change evidence was provided. No evidence package or authorized final approval was received, so the overall decision remains **NOT APPROVED**.
 
 ## Why approval cannot be recorded
 
@@ -90,7 +96,7 @@ This decision applies only to `python-humanize/humanize` at the specified snapsh
 
 ## Related records
 
-- [Phase 8.11 privacy remediation plan](privacy-remediation-plan.md)
+- [Privacy remediation plan](privacy-remediation-plan.md)
 - [Phase 8.12 AI processing policy decision](pilot-ai-processing-policy-decision.md)
 - [Candidate data disposition template](templates/privacy/candidate-data-disposition-template.md)
 - [Notice/license review template](templates/privacy/notice-license-review-template.md)
