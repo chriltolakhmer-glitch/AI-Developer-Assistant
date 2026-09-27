@@ -1,6 +1,6 @@
 # Phase 13.1 — Controlled Benchmark Annotation Pilot Status
 
-**Status:** **AUTHORIZED WITH CONTROLS — LIMITED PILOT ONLY**
+**Status:** **ANNOTATION DRAFT COMPLETE — HUMAN REVIEW PENDING; PILOT NOT FROZEN**
 
 **Pilot repository selected:** `python-humanize/humanize`
 
@@ -8,9 +8,13 @@
 
 **Maximum pilot size:** 12 questions
 
-**Questions created:** **0 of 12 maximum**
+**Questions created:** **12 of 12 maximum**
 
-This status record applies the Phase 13.3 solo-thesis risk acceptance recommendation recorded by `Alot — Project Owner / Thesis Researcher`. It authorizes only a maximum 12-question humanize pilot under local-only controls. No question has been created, no source has been inspected for authoring, no chunk inventory has been consumed, and no benchmark data has been created.
+**Structural validation:** **PASS** against the exact local Humanize chunk map; 3 questions per category.
+
+**Human review / freeze:** **PENDING** in the external `human-review-record.md`; no freeze is claimed.
+
+This status record applies the Phase 13.3 solo-thesis risk acceptance recommendation recorded by `Alot — Project Owner / Thesis Researcher`. It authorizes only a maximum 12-question humanize pilot under local-only controls. The 12 pilot records are stored externally with their chunk map and draft export; no pilot data is committed to this repository.
 
 ## Required pilot record shape
 
@@ -36,13 +40,16 @@ Question text, source paths/spans, chunk IDs, labels, rationale, and review mate
 | Annotation purpose authorization | `AUTHORIZED — PILOT ONLY` | Explicit Phase 13.3 risk acceptance by Alot; maximum 12 questions. |
 | Source inspection for authoring | `AUTHORIZED — PILOT ONLY` | Local-only, Python-only, sensitive-file exclusions, and stop conditions apply. |
 | Chunk inventory use for gold evidence | `AUTHORIZED — PILOT ONLY` | Only after the approved exact-SHA inventory is available and kept outside Git. |
-| Pilot validation | `NOT RUN` | There are no pilot questions or evidence records to validate. |
+| Pilot validation | `PASS — STRUCTURAL ONLY` | All 12 records validate against the exact local chunk map; human review is still pending. |
+| Human review and freeze | `PENDING` | The external review record has not been completed; no freeze is claimed. |
 | Expansion to full benchmark | `NOT ALLOWED` | Full benchmark requires separate review, pilot completion, and freeze prerequisites. |
 
 ## Decision
 
-The pilot repository is authorized for controlled execution only. The pilot contains **0/12 questions**, with no fabricated placeholders. Any authoring must remain local, use the exact SHA and approved Python scope, exclude sensitive or unassessable files, preserve attribution, and stop on a new finding or control failure. Record each authorized question with the required ID, category, difficulty, evidence chunks, grades, and validation notes outside Git.
+The pilot repository is authorized for controlled execution only. The pilot contains **12/12 questions**, authored externally from the exact SHA and approved Python scope. Human review remains pending. Any correction must be revalidated; the pilot must remain excluded from the final benchmark.
 
-**Full benchmark expansion:** **NOT ALLOWED.** The pilot must be independently reviewed and validated, and remains excluded from the final benchmark if it influences instructions or tuning. Passing implementation tests does not authorize expansion.
+**Pilot freeze:** **NOT COMPLETE — pending Alot's traceable human review and acceptance.**
+
+**Full benchmark expansion:** **NOT ALLOWED.** The pilot must be reviewed, frozen, and excluded from the final benchmark if it influences instructions or tuning. Passing implementation tests or structural validation does not authorize expansion.
 
 See [annotation-pilot-plan.md](annotation-pilot-plan.md), [repository-approval-thesis-risk-acceptance.md](repository-approval-thesis-risk-acceptance.md), [repository-approvals/humanize.md](repository-approvals/humanize.md), [repository-approval-status-report.md](repository-approval-status-report.md), and [benchmark-schema.md](benchmark-schema.md).
