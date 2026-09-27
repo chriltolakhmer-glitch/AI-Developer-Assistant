@@ -1,6 +1,6 @@
 # Phase 13.1 — Controlled Benchmark Annotation Pilot Status
 
-**Status:** **ANNOTATION DRAFT COMPLETE — HUMAN REVIEW PENDING; PILOT NOT FROZEN**
+**Status:** **PILOT FROZEN FOR PILOT USE ONLY — FULL EXPANSION BLOCKED**
 
 **Pilot repository selected:** `python-humanize/humanize`
 
@@ -12,7 +12,7 @@
 
 **Structural validation:** **PASS** against the exact local Humanize chunk map; 3 questions per category.
 
-**Human review / freeze:** **PENDING** in the external `human-review-record.md`; no freeze is claimed.
+**Human review / freeze:** **COMPLETE** — Alot accepted 12/12 existing artifact records; 0 revisions were required. The external pilot is frozen for pilot use only.
 
 This status record applies the Phase 13.3 solo-thesis risk acceptance recommendation recorded by `Alot — Project Owner / Thesis Researcher`. It authorizes only a maximum 12-question humanize pilot under local-only controls. The 12 pilot records are stored externally with their chunk map and draft export; no pilot data is committed to this repository.
 
@@ -41,14 +41,14 @@ Question text, source paths/spans, chunk IDs, labels, rationale, and review mate
 | Source inspection for authoring | `AUTHORIZED — PILOT ONLY` | Local-only, Python-only, sensitive-file exclusions, and stop conditions apply. |
 | Chunk inventory use for gold evidence | `AUTHORIZED — PILOT ONLY` | Only after the approved exact-SHA inventory is available and kept outside Git. |
 | Pilot validation | `PASS — STRUCTURAL ONLY` | All 12 records validate against the exact local chunk map; human review is still pending. |
-| Human review and freeze | `PENDING` | The external review record has not been completed; no freeze is claimed. |
+| Human review and freeze | `PASS — PILOT ONLY` | Alot accepted 12/12 artifact records; the external pilot is frozen and excluded from the final benchmark. |
 | Expansion to full benchmark | `NOT ALLOWED` | Full benchmark requires separate review, pilot completion, and freeze prerequisites. |
 
 ## Decision
 
-The pilot repository is authorized for controlled execution only. The pilot contains **12/12 questions**, authored externally from the exact SHA and approved Python scope. Human review remains pending. Any correction must be revalidated; the pilot must remain excluded from the final benchmark.
+The pilot repository is authorized for controlled execution only. The pilot contains **12/12 questions**, authored externally from the exact SHA and approved Python scope. Alot reviewed the existing external artifacts and accepted all 12 records with no revisions required. The pilot is frozen for pilot use only and remains excluded from the final benchmark.
 
-**Pilot freeze:** **NOT COMPLETE — pending Alot's traceable human review and acceptance.**
+**Pilot freeze:** **COMPLETE — PILOT USE ONLY.** The freeze does not authorize retrieval experiments or full-benchmark expansion.
 
 **Full benchmark expansion:** **NOT ALLOWED.** The pilot must be reviewed, frozen, and excluded from the final benchmark if it influences instructions or tuning. Passing implementation tests or structural validation does not authorize expansion.
 
