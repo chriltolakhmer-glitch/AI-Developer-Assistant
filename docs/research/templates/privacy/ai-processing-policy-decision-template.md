@@ -1,3 +1,11 @@
+# Phase 19.8 - Supersession notice
+
+**SUPERSEDED — replaced by lightweight thesis workflow**
+
+Effective 2026-09-27. Use the [lightweight thesis workflow](../../thesis-benchmark-workflow.md) as the current operational reference. The original document below is preserved as historical evidence, including its prior decisions, unresolved findings and phase-specific statuses. Its approval chains, mandatory forms/signatures/reviewer assignments, expansion quotas and unused-candidate closure tasks are no longer active requirements. Supersession does not assert that historical safety issues were resolved or authorize source processing, new annotation, evaluation or release.
+
+## Historical document (unchanged)
+
 # AI-Assisted Source Analysis Policy Decision — Blank Template
 
 **Use:** This template records an authorized policy decision; it does not authorize a transfer by itself. The current thesis default in [ADR-008](../../../decisions/ADR-008-source-code-privacy.md) prohibits hosted AI/chat or other services that receive source or source-derived research data. Until an explicit approved exception exists, the decision for hosted AI source analysis is **NOT ALLOWED**. Do not submit source code to an AI service while this form is pending.

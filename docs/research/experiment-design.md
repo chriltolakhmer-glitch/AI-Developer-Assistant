@@ -1,3 +1,13 @@
+# Phase 19.8 - Software prototype scope notice
+
+**PAUSED - new experiments and optimization**
+
+Current project scope: [Research software prototype validation](software-prototype-scope.md).
+
+Keep this design as a future reference. No new experiments, retrieval tuning, additional strategies or scaling studies are active. Existing software tests and reproducibility checks remain active; existing pilot results and artifacts remain frozen.
+
+## Preserved earlier document
+
 # Experiment Design
 
 **Status:** Phase 2 blueprint — no implementation exists yet. Operationalizes [research-question.md](research-question.md) using the dataset defined in [dataset-design.md](dataset-design.md) and the metrics defined in [evaluation-plan.md](evaluation-plan.md).

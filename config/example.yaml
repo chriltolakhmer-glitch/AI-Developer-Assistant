@@ -1,0 +1,16 @@
+# Copy this file to an external location and pass it with --config.
+# Keep source checkouts, embeddings, indexes, and reports outside the repository.
+data_root: "C:/research/prototype-data"
+corpus_root: "C:/research/prototype-data/corpus"
+validation_output: "C:/research/prototype-data/validation"
+embedding_model_cache: "C:/research/prototype-data/model-cache"
+
+# The prototype is local/offline by design.
+offline: true
+device: "cpu"
+embedding_model_id: "sentence-transformers/all-MiniLM-L6-v2"
+embedding_model_revision: "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+embedding_dimensions: 384
+max_tokens: 256
+retrieval_k: 50
+rrf_constant: 60

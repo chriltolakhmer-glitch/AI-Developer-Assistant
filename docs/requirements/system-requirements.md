@@ -1,3 +1,13 @@
+# Phase 19.8 - Software prototype scope notice
+
+**HISTORICAL BLUEPRINT - current scope narrowed**
+
+Current project scope: [Research software prototype validation](../research/software-prototype-scope.md).
+
+The requirements below retain the original design rationale. Current work maintains and validates implemented ingestion, chunking, indexing, retrieval, evaluation and validation utilities on the Humanize pilot. Unimplemented blueprint features, optional LLM/UI capabilities, new retrieval strategies, new comparisons and scaling studies are not active requirements.
+
+## Preserved earlier document
+
 # System Requirements
 
 **Status:** Draft blueprint for Phase 1. No source code has been implemented against this document yet.

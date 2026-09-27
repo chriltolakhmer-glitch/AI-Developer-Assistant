@@ -1,3 +1,13 @@
+# Phase 19.8 - Supersession notice
+
+**SUPERSEDED — replaced by lightweight thesis workflow**
+
+Effective 2026-09-27. Use the [lightweight thesis workflow](thesis-benchmark-workflow.md) as the current operational reference. The original document below is preserved as historical evidence, including its prior decisions, unresolved findings and phase-specific statuses. Its approval chains, mandatory forms/signatures/reviewer assignments, expansion quotas and unused-candidate closure tasks are no longer active requirements. Supersession does not assert that historical safety issues were resolved or authorize source processing, new annotation, evaluation or release.
+
+**Current scope:** Humanize is COMPLETE / FROZEN / PILOT-ONLY. All eight non-Humanize candidates are NOT SELECTED FOR THESIS SCOPE. The former eight-blocked queue is archived; missing approvals for unused repositories are not an active thesis backlog.
+
+## Historical document (unchanged)
+
 # Phase 12.2 — Consolidated Repository Approval Status
 
 **Status:** **APPROVED WITH THESIS SCOPE LIMITATIONS** — thesis-level residual-risk acceptance recorded; no repository-specific approval has been granted.

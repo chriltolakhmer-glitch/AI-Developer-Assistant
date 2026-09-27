@@ -1,0 +1,58 @@
+{
+  "version": "0.1.0",
+  "status": "RELEASED RESEARCH PROTOTYPE",
+  "research_status": "REPRODUCIBLE",
+  "benchmark_status": "FUTURE WORK",
+  "release_date": "2026-09-28",
+  "git_tag": "v0.1.0",
+  "git_sha": "9a103131690ee42bb621de37aa655a429dde7376",
+  "git_worktree_dirty": false,
+  "python": ">=3.11",
+  "tested_environment": {
+    "python": "3.14.7",
+    "os": "Windows",
+    "installation": "fresh virtual environment; pip install ."
+  },
+  "dependencies": {
+    "base": [
+      "PyYAML>=6.0"
+    ],
+    "exact_lock": "requirements-lock.txt",
+    "lock_composition": [
+      "requirements-retrieval.txt",
+      "requirements-embedding.txt"
+    ],
+    "build_backend": "setuptools==84.0.0",
+    "consistency_check": "python -m pip check: passed"
+  },
+  "tests_passed": {
+    "command": "python -m unittest discover -s tests -v",
+    "result": "passed",
+    "passed": 142,
+    "skipped": 0,
+    "model_cache": "existing pinned offline cache; HF_HUB_OFFLINE=1"
+  },
+  "clean_install_checks": {
+    "pip_install_lock": "passed",
+    "pip_install_project": "passed",
+    "prototype_help": "passed",
+    "prototype_demo": "passed",
+    "prototype_evaluate_json": "passed",
+    "prototype_validate": "passed; no local corpus supplied, so readiness correctly reported no"
+  },
+  "supported_commands": [
+    "prototype --help",
+    "prototype demo",
+    "prototype evaluate [--json]",
+    "prototype validate [--corpus-root PATH] [--output-dir PATH]",
+    "prototype reproduce RUN_ID"
+  ],
+  "research_scope": {
+    "humanize": "unchanged; frozen pilot",
+    "benchmark": "unchanged; expansion deferred",
+    "retrieval_algorithms": "unchanged",
+    "evaluation_methodology": "unchanged",
+    "expansion_started": false
+  },
+  "provenance_note": "git_sha identifies the clean source commit targeted by git_tag. This manifest is regenerated and committed after tagging."
+}

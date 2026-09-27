@@ -1,0 +1,3 @@
+# Complete pinned runtime/research environment (exact versions in both included files).
+# Install this set, then install the project itself with: python -m pip install .
+-r requirements-retrieval.txt

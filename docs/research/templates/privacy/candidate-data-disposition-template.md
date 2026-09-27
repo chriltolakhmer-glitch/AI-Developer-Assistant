@@ -1,3 +1,11 @@
+# Phase 19.8 - Supersession notice
+
+**SUPERSEDED — replaced by lightweight thesis workflow**
+
+Effective 2026-09-27. Use the [lightweight thesis workflow](../../thesis-benchmark-workflow.md) as the current operational reference. The original document below is preserved as historical evidence, including its prior decisions, unresolved findings and phase-specific statuses. Its approval chains, mandatory forms/signatures/reviewer assignments, expansion quotas and unused-candidate closure tasks are no longer active requirements. Supersession does not assert that historical safety issues were resolved or authorize source processing, new annotation, evaluation or release.
+
+## Historical document (unchanged)
+
 # Pilot Candidate Data Disposition — Blank Template
 
 **Use:** Controlled local research record only. Do not commit a completed form, candidate values, raw source excerpts, or sensitive location details to Git. Complete one row per candidate. If no candidates are returned by an approved review, record the scanner/review scope and explicit zero-candidate result instead of leaving the form ambiguous.

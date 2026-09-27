@@ -1,3 +1,13 @@
+# Phase 19.8 - Software prototype scope notice
+
+**HISTORICAL PLAN - existing evaluation utilities remain active**
+
+Current project scope: [Research software prototype validation](software-prototype-scope.md).
+
+Maintain evaluation code, fixed metrics, existing pilot results and validation/reproducibility checks. Additional experiment designs, comparisons, parameter searches and scaling studies described below are paused. This plan does not expand the Humanize-only dataset or add benchmark questions.
+
+## Preserved earlier document
+
 # Evaluation Plan
 
 **Status:** Phase 2 blueprint — no implementation exists yet. Operationalizes [research-question.md](research-question.md).

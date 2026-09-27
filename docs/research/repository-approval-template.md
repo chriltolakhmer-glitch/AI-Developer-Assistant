@@ -1,8 +1,46 @@
+# Phase 19.8 - Supersession notice
+
+**SUPERSEDED — replaced by lightweight thesis workflow**
+
+Effective 2026-09-27. Use the [lightweight thesis workflow](thesis-benchmark-workflow.md) as the current operational reference. The original document below is preserved as historical evidence, including its prior decisions, unresolved findings and phase-specific statuses. Its approval chains, mandatory forms/signatures/reviewer assignments, expansion quotas and unused-candidate closure tasks are no longer active requirements. Supersession does not assert that historical safety issues were resolved or authorize source processing, new annotation, evaluation or release.
+
+## Historical document (unchanged)
+
 # Phase 11 — Repository Approval Record Template
 
 **Purpose:** One review record per exact repository snapshot. This is a blank template, not an approval, privacy clearance, legal opinion, or authorization to inspect source or annotate the benchmark. Do not fill it with invented, assumed, or copied approval evidence.
 
-**Handling:** Keep completed records, scan outputs, detailed findings, file-level manifests, source-derived evidence, and signatures in the approved, access-controlled local research-data area outside the thesis Git repository. The committed copy remains blank and non-sensitive. Record only safe evidence references or digests here; never commit credentials, raw findings, source excerpts, sensitive paths, or private reviewer material.
+**Handling:** Keep detailed completed evidence, scan outputs, file-level manifests, source-derived evidence, and signatures in the approved, access-controlled local research-data area outside the thesis Git repository. This reusable template remains blank. A per-candidate record may contain non-sensitive status, aggregate findings and safe evidence references/digests; never commit credentials, raw findings, source excerpts, sensitive paths, or private reviewer material.
+
+**Phase 19.6 calibration:** Use the [calibrated checklist and status rules](gate1-workflow-calibration.md) under the [simplified four-gate workflow](benchmark-research-workflow-final.md). These fields improve evidence recording; they grant no review or processing permission.
+
+## Review setup and evidence index
+
+Complete setup before any newly authorized collection. Existing session authorization may be referenced; do not ask for the same authorization again. Missing required handling evidence remains a blocker, not permission inferred from a folder path.
+
+| Field | Value |
+|---|---|
+| Selection rationale / registry reference | `[existing candidate only; why selected]` |
+| Collection authority / permitted checks | `[dated instruction or decision reference; local scope, boundaries and stop conditions]` |
+| Proposed next activity / exclusions | `[distinguish evidence review, inventory preparation, annotation, retrieval and distribution]` |
+| Evidence collector / method / date | `[human or automated; identity, UTC date, method version]` |
+| Designated reviewers / authority | `[privacy, terms and decision roles; named person and authority evidence, or UNASSIGNED]` |
+| Data owner / incident contact | `[named responsibility and restricted contact reference, or UNASSIGNED]` |
+| Packet alias / version / collection scope | `[safe reference; exact SHA; all tracked files vs proposed eligible files; excluded/ignored scope]` |
+| Collection progress / Gate 1 state | `[NOT STARTED / IN PROGRESS / RECORDED] / [BLOCKED / READY FOR REVIEW / APPROVED WITH CONTROLS / APPROVED; rejection only by explicit authority]` |
+| Single-reviewer limitation | `[roles shared, independence limitations; no automated collector represented as a human reviewer]` |
+
+| Evidence ID | Safe reference / digest | Exact SHA and scope | Method / tool / configuration reference | Collector / collection UTC | Review result / reviewer / review UTC |
+|---|---|---|---|---|---|
+| `[E1]` | `[external alias; SHA-256]` | `[scope]` | `[method]` | `[collector/date]` | `[observation vs accepted disposition]` |
+
+Use separate collection, original-run and human-review dates. File modification time is not a scan timestamp. Preserve contradictory and superseded evidence with a reason; a newer report does not silently erase an earlier finding.
+
+| Blocker ID | Primary class | Evidence / contradiction | Required closure evidence | Responsible person | Next action / target or UNASSIGNED | Disposition / authority reference |
+|---|---|---|---|---|---|---|
+| `[B1]` | `[mandatory approval / evidence collection / workflow-documentation]` | `[safe summary]` | `[objective closure test]` | `[name or UNASSIGNED]` | `[action/date or unassigned]` | `[OPEN; no implicit waiver]` |
+
+The primary class routes the work; evidence and documentation problems can still block a mandatory approval requirement. Record one blocker once and reference its ID from the gates below.
 
 ---
 
@@ -17,6 +55,8 @@
 | Review record ID | `[unique, non-sensitive ID]` |
 | Review date (UTC) | `[YYYY-MM-DD]` |
 | Checkout identity evidence | `[external evidence reference/digest; exact SHA and clean/read-only state]` |
+| Observed checkout state | `[origin, HEAD/tree, detached state, clean/untracked result, local object availability, normalization and reproducibility limits]` |
+| Read-only handling evidence | `[actual mechanism/effective access, verification date and control owner; separate from clean status or file attributes]` |
 
 ## B. License, language, and size scope
 
@@ -26,7 +66,7 @@
 | License file / evidence | `[file name and external review reference; retain applicable notices]` |
 | Per-file notices / terms review | `[NOT STARTED / IN PROGRESS / PASS / BLOCKED; reviewer and evidence reference]` |
 | GitHub language metadata | `[languages as recorded; informational only]` |
-| Approved study language scope | `[Python only, or explicitly approved scope]` |
+| Proposed study language scope / approval reference | `[Python only unless separately approved; do not label proposed scope approved]` |
 | File-filter / manifest version | `[for example, phase4.5-python-v1]` |
 | Size category | `[Small / Medium / Large under the approved eligible-Python-LOC thresholds]` |
 | Eligible Python files / LOC | `[verified aggregate count and evidence reference; never include the detailed file manifest here]` |
@@ -37,6 +77,10 @@ Root license evidence is a screening input, not blanket permission or legal advi
 ## C. Repository-specific privacy and handling review
 
 For each review, record the state, reviewer/role, review date, method/scope, safe evidence reference or digest, exclusions, and unresolved risk. Keep detailed findings outside Git.
+
+For scans, retain the original command, executable/version and configuration digests, ignore rules, exact files/refs/range, timestamp, exit code and output digest externally. Compare report counts with summaries and disposition records; any unexplained conflict stays BLOCKED. Record the need and permitted scope before a new scan. For personal/confidential-data review, explicitly cover generated artifacts, fixtures/external datasets and prior exposure, with method limitations; zero keyword hits do not prove absence. For history, record available vs scanned refs/commits, shallow state/errors, uncovered scope and any separately authorized limitation acceptance.
+
+For handling, distinguish observed from approved controls. Record actual authorized readers/effective access and read-only mechanism, telemetry/network limits, backup destinations/copies/encryption/access, retention trigger or period, deletion coverage/verifier and incident responsibility. Each item needs a dated evidence reference; intended policy alone does not establish implementation.
 
 | Review gate | Status (`NOT STARTED` / `IN PROGRESS` / `PASS` / `BLOCKED`) | Reviewer, date, scope and safe evidence reference | Exclusions / residual risk |
 |---|---|---|---|
@@ -64,9 +108,11 @@ Confirm each rule or record an approved, explicit exception in the external deci
 
 ## D. Review outcome and approval decision
 
-**Overall review status:** `[NOT STARTED / IN REVIEW / BLOCKED / APPROVED WITH CONTROLS / REJECTED]`
+**Overall Gate 1 status:** `[BLOCKED / READY FOR REVIEW / APPROVED WITH CONTROLS / APPROVED; REJECTED only with an explicit authorized rejection]`
 
-**Authorized decision:** `[APPROVED / APPROVED WITH CONTROLS / REJECTED — select one; blank is not approval]`
+**Authorized decision:** `[NOT RECORDED / APPROVED / APPROVED WITH CONTROLS / REJECTED; give authority/date/reference; a collector's BLOCKED disposition is not an approval]`
+
+`READY FOR REVIEW` means all mandatory evidence is complete, consistent, dated and attributable, all relevant findings resolved and required exception decisions recorded; only the final authorized decision remains. It permits no processing. `APPROVED WITH CONTROLS` requires evidenced controls and explicit accepted residual risk, not promises to collect missing mandatory evidence. Unresolved requirements remain `BLOCKED`. Historical readiness labels are interpreted using the calibration crosswalk, not automatically upgraded.
 
 **Approved purposes and exact scope:** `[for example: manual benchmark question/evidence annotation for this exact SHA and approved Python manifest only]`
 

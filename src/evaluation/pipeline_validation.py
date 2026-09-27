@@ -175,12 +175,12 @@ class PipelineValidationRunner:
             and result.chunk_failure_count == 0
             and result.deterministic is True
             for result in results
-        ) and len(results) == len(APPROVED_CORPUS)
+        ) and len(results) == len(repositories)
 
         report = PipelineValidationReport(
             schema_version="1.0",
             python_version=platform.python_version(),
-            expected_repository_count=len(APPROVED_CORPUS),
+            expected_repository_count=len(repositories),
             validated_repository_count=sum(
                 result.verified_commit_sha == result.expected_commit_sha
                 for result in results

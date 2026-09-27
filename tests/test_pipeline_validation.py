@@ -54,12 +54,16 @@ class PipelineValidationTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8", newline="\n")
 
     def test_validates_scanner_parser_and_chunker_together(self) -> None:
-        result = self.runner.run(
+        report = self.runner.run(
             self.corpus_root,
             self.output_directory,
             repositories=(self.spec,),
-        ).repositories[0]
+        )
+        result = report.repositories[0]
 
+        self.assertEqual(1, report.expected_repository_count)
+        self.assertEqual(1, report.validated_repository_count)
+        self.assertFalse(report.preprocessing_ready)
         self.assertEqual("example/sample", result.repository_id)
         self.assertEqual(self.commit_sha, result.verified_commit_sha)
         self.assertEqual("validated_with_issues", result.status)
