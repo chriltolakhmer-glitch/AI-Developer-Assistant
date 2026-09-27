@@ -1,6 +1,10 @@
 # Repository Approval Record — humanize
 
-**Record state:** EVIDENCE PARTIALLY CLOSED — repository-specific approval not recorded.
+**Record state:** **APPROVED WITH THESIS SCOPE LIMITATIONS — 12-QUESTION PILOT ONLY**
+
+**Reviewer / researcher:** `Alot — Project Owner / Thesis Researcher`
+
+**Decision boundary:** This is a solo-thesis risk acceptance for one controlled pilot. It is not perfect privacy clearance, a security audit, legal approval, or production approval.
 
 ## A. Repository and snapshot identity
 
@@ -51,30 +55,30 @@
 
 ## D. Review outcome and approval decision
 
-**Overall review status:** `BLOCKED — required repository-specific human reviews are incomplete`
+**Overall review status:** `APPROVED WITH CONTROLS — limited 12-question pilot only; unresolved repository limitations remain`
 
-**Authorized decision:** `[PENDING HUMAN CONFIRMATION: APPROVED / APPROVED WITH CONTROLS / REJECTED]`
+**Authorized decision:** `APPROVED WITH CONTROLS — manual annotation for a maximum of 12 pilot questions at this exact SHA only`
 
-**Approved purposes and exact scope:** `[PENDING HUMAN CONFIRMATION: purpose, exact SHA, Python manifest, and exclusions]`
+**Approved purposes and exact scope:** `Manual authoring and review of at most 12 pilot questions for python-humanize/humanize at commit 392aef707c0e74341ab4a51420984e9ea6b566c5, limited to the approved Python scope and reviewed exclusions.`
 
-**Explicitly excluded activities:** `Benchmark annotation, indexing, embedding, retrieval, experiments, external transmission, and publication remain unauthorized unless separately and explicitly approved.`
+**Explicitly excluded activities:** `The full 108-question benchmark, benchmark freeze, expansion to the other eight repositories, retrieval/indexing/embedding experiments, external transmission, publication, redistribution, and production use remain unauthorized.`
 
-**Conditions, exclusions, and stop triggers:** `[PENDING HUMAN CONFIRMATION: specific non-sensitive terms and stop triggers]`
+**Conditions, exclusions, and stop triggers:** `Local-only work; public pinned snapshot; Python-only approved scope; exclude sensitive or unassessable files; keep source-derived records outside Git; preserve MIT attribution; stop on new findings, scope mismatch, failed handling controls, or unresolved evidence that affects the pilot.`
 
-**Residual risks and accepted limitations:** `Identity, saved scan-result digests, root MIT evidence, and manifest identity/counts are documented. History scope, personal/confidential-data review, file-level notices, handling controls, historical exposure, and attributable approval remain unresolved; no implicit acceptance.`
+**Residual risks and accepted limitations:** `Identity, saved scan-result digests, root MIT evidence, and manifest identity/counts are documented. Shallow history, incomplete personal/confidential-data review, incomplete file-level notice review, handling gaps, and historical exposure concerns remain accepted only within this limited pilot decision; this is not perfect privacy clearance.`
 
-**Approval evidence reference / digest:** `[PENDING HUMAN CONFIRMATION: controlled external approval record/digest]`
+**Approval evidence reference / digest:** `Phase 13.3 solo-thesis risk acceptance recommendation; reviewer Alot; based on the committed evidence references above and the documented limitations.`
 
 | Decision authority | Name / role | Decision | Date (UTC) | Signature / attestation reference |
 |---|---|---|---|---|
-| Repository/privacy approver | `[PENDING HUMAN CONFIRMATION]` | `[PENDING HUMAN CONFIRMATION]` | `[PENDING HUMAN CONFIRMATION]` | `[PENDING HUMAN CONFIRMATION]` |
+| Repository/privacy approver | `Alot — Project Owner / Thesis Researcher` | `APPROVED WITH CONTROLS — pilot only` | `2026-09-27` | `Committed Phase 13.3 risk-acceptance recommendation; not an independent privacy or legal attestation` |
 | License/terms reviewer | `[PENDING HUMAN CONFIRMATION: name/role or NOT REQUIRED with rationale]` | `[PENDING HUMAN CONFIRMATION]` | `[PENDING HUMAN CONFIRMATION]` | `[PENDING HUMAN CONFIRMATION]` |
 
 ### Scope and expiry of approval
 
 - This record applies only to the identity, exact SHA, Python scope, filter version, manifest, and purpose written above.
 - It does not extend to another snapshot, file set, processing purpose, external service, or publication.
-- **Benchmark annotation authorization:** `NOT AUTHORIZED — pending explicit attributable approval.`
+- **Benchmark annotation authorization:** `AUTHORIZED WITHIN THE SCOPE ABOVE — maximum 12 humanize pilot questions only.`
 - **Retrieval/indexing/embedding/experiments:** `NOT AUTHORIZED.`
 
 ## E. Annotation handoff checklist — only after approval
@@ -84,6 +88,6 @@
 - [ ] Phase 10 schema, rubric, split, pilot exclusion, and reviewer sample are confirmed. `BLOCKED`
 - [ ] Annotators have approved external storage and evidence-record instructions. `BLOCKED`
 
-**Handoff state:** `BLOCKED`
+**Handoff state:** `READY FOR MANUAL ANNOTATION — LIMITED PILOT ONLY`
 
-**Handoff reviewer and date:** `[PENDING HUMAN CONFIRMATION]`
+**Handoff reviewer and date:** `Alot — Project Owner / Thesis Researcher, 2026-09-27; pilot-only risk acceptance, not full benchmark authorization.`

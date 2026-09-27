@@ -4,9 +4,9 @@
 
 **Pinned commit:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
 
-**Readiness:** **NOT READY — BLOCKED**
+**Readiness:** **READY FOR LIMITED PILOT — FULL APPROVAL BLOCKED**
 
-This is a minimal handoff checklist for the existing humanize approval record. It records missing approval evidence only. No humanize source files were accessed for annotation, no benchmark questions were created, and no chunk inventory was consumed.
+This is a minimal handoff checklist for the existing humanize approval record. The Phase 13.3 recommendation by `Alot — Project Owner / Thesis Researcher` authorizes a maximum 12-question pilot under explicit controls. The checklist still records unresolved evidence and limitations; it does not claim perfect privacy clearance or production approval. No humanize source files have been accessed for annotation, no benchmark questions have been created, and no chunk inventory has been consumed.
 
 ## Missing approval evidence
 
@@ -23,13 +23,14 @@ Complete each item in the controlled external evidence packet, then update [repo
 
 ## Fail-closed decision
 
-Until every applicable item above is evidenced and the humanize record contains an attributable decision, keep:
+The following evidence remains unresolved and must stay visible during the pilot. It does not authorize expansion beyond the approved 12-question pilot:
 
-- **Repository approval:** `BLOCKED`
-- **Benchmark annotation authorization:** `NOT AUTHORIZED`
-- **Handoff state:** `BLOCKED`
-- **Phase 13.3 annotation:** `NOT STARTED`
+- **Repository approval:** `APPROVED WITH THESIS SCOPE LIMITATIONS — PILOT ONLY`
+- **Benchmark annotation authorization:** `AUTHORIZED — MAXIMUM 12 PILOT QUESTIONS`
+- **Handoff state:** `READY FOR LIMITED PILOT`
+- **Phase 13.3 annotation:** `AUTHORIZED — PILOT ONLY`
+- **Full 108-question expansion:** `BLOCKED`
 
-This checklist does not itself grant approval, accept residual risk, authorize source inspection, or unlock annotation. It does not modify scanner, parser, chunker, retrieval, or evaluation code.
+This checklist records the limited pilot handoff; it does not grant full repository clearance, perfect privacy clearance, production approval, or authorization to expand the benchmark. It does not modify scanner, parser, chunker, retrieval, or evaluation code.
 
 See [repository-approvals/humanize.md](repository-approvals/humanize.md), [benchmark-annotation-pilot-status.md](benchmark-annotation-pilot-status.md), [repository-approval-evidence-closure.md](repository-approval-evidence-closure.md), and [repository-approval-thesis-risk-acceptance.md](repository-approval-thesis-risk-acceptance.md).
