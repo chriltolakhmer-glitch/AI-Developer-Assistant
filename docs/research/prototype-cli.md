@@ -46,18 +46,27 @@ Shows the parser, chunker, and evaluator flow over generated Python code:
 prototype demo
 ```
 
-The demo is offline, repeatable, and source-independent.
+The demo is offline, repeatable, and source-independent. It creates three chunks from a generated `demo.py`, scores two synthetic queries, and prints aggregate MRR/nDCG. The fixed fixture is designed to exercise the parsing/chunking/evaluator path, so perfect scores are not retrieval-quality results.
 
 ### `prototype reproduce RUN_ID`
 
-Replays a prior tracked `demo`, `evaluate`, or `validate` command and compares the standardized output. Find the ID in `$env:PROTOTYPE_DATA_ROOT\runs` (default: `$HOME\prototype-data\runs`). For example:
+Replays a prior tracked `demo`, `evaluate`, or `validate` command and compares the standardized output. Find the ID in `$env:PROTOTYPE_DATA_ROOT\runs` (default: `$HOME\prototype-data\runs`). To reproduce the latest demo specifically, inspect each run's metadata and select the newest one whose command is `demo`:
 
 ```powershell
-$run = Get-ChildItem "$env:PROTOTYPE_DATA_ROOT/runs" -Directory | Select-Object -First 1
-prototype reproduce $run.Name
+$run = Get-ChildItem "$env:PROTOTYPE_DATA_ROOT/runs" -Directory |
+	ForEach-Object {
+		$metadata = Get-Content (Join-Path $_.FullName 'metadata.json') -Raw | ConvertFrom-Json
+		if ($metadata.command -eq 'demo') {
+			[pscustomobject]@{ Id = $_.Name; Created = $_.LastWriteTime }
+		}
+	} |
+	Sort-Object Created -Descending |
+	Select-Object -First 1
+if (-not $run) { throw 'Run prototype demo before looking up its run ID.' }
+prototype reproduce $run.Id
 ```
 
-Use the intended run directory if several runs exist; the example selects the first one only for illustration.
+Reproduction compares the saved standardized output payload, not timestamps, run IDs, duration, or scientific validity. Keep the same release, configuration, and inputs.
 
 ## Troubleshooting
 

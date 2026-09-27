@@ -42,7 +42,7 @@ class TrackingTests(unittest.TestCase):
             results = json.loads((run_directory / "results.json").read_text(encoding="utf-8"))
             self.assertEqual(tracker.config_sha256, metadata["configuration_hash"])
             self.assertEqual(tracker.config_sha256, results["configuration_hash"])
-            self.assertEqual("0.1.0", metadata["software_version"])
+            self.assertEqual("0.1.1", metadata["software_version"])
             self.assertEqual("completed", results["payload"]["status"])
             self.assertIn("Starting command", (run_directory / "logs.txt").read_text(encoding="utf-8"))
 

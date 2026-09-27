@@ -1,13 +1,32 @@
 # Research Prototype Release Guide
 
-**Version:** 0.1.0  
-**Status:** Released Research Prototype  
-**Research status:** Reproducible  
+**Version:** 0.1.1
+**Status:** Released Research Prototype
+**Research status:** Reproducible
 **Benchmark status:** Future work; no expansion started.
 
 This release packages the existing software workflow only. It does not release or modify Humanize pilot data, benchmark questions, source checkouts, or research results.
 
-The repository-root [release manifest](../../release-manifest.json) records the tested revision, dependencies, test result, and CLI surface.
+The repository-root [source manifest](../../release-manifest.json) records the dependency/test contract and source baseline. The immutable GitHub Release provides a generated `release-manifest.json` asset whose `git_sha` is the exact tagged commit, plus the external-user verification report; a commit cannot contain its own commit SHA without a self-reference.
+
+## Get the tagged source
+
+From the parent directory where the checkout should be created, use the versioned tag rather than `main`:
+
+```powershell
+$repoUrl = 'https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant.git'
+git ls-remote --exit-code --tags $repoUrl refs/tags/v0.1.1
+git clone --depth 1 --branch v0.1.1 $repoUrl AI-Developer-Assistant
+Set-Location AI-Developer-Assistant
+$head = (git rev-parse HEAD).Trim()
+$sourceManifest = Get-Content .\release-manifest.json -Raw | ConvertFrom-Json
+$tagManifest = Invoke-RestMethod 'https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/download/v0.1.1/release-manifest.json'
+if ($sourceManifest.version -ne '0.1.1' -or $sourceManifest.git_tag -ne 'v0.1.1' -or $tagManifest.git_sha -ne $head) {
+	throw 'Release manifest asset does not identify this tag checkout.'
+}
+```
+
+The `git ls-remote` check must list the tag. If it fails or cloning reports `Remote branch v0.1.1 not found`, stop and request publication of the release tag; do not silently use the default branch. The downloaded release manifest asset binds the exact tag commit SHA without creating a self-referential commit hash.
 
 ## Installation
 
@@ -20,6 +39,13 @@ python -m pip install -r requirements-lock.txt
 python -m pip install .
 python -m pip check
 $env:PROTOTYPE_DATA_ROOT = "$HOME/prototype-data"
+```
+
+If PowerShell blocks `Activate.ps1`, allow it for the current session only, then activate the environment:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
 ```
 
 The install creates the `prototype` command. For a smaller CLI-only install, omit the lock-file step; `python -m pip install .` installs the declared base dependency. The lock composes the pinned retrieval and embedding requirements and is used for the full test suite/model-backed operations. Model-backed tests additionally need the pinned offline model cache.
@@ -59,7 +85,7 @@ Run records contain normalized configuration, a configuration hash, software/Git
 2. Set `PROTOTYPE_DATA_ROOT` to a new directory outside the checkout.
 3. Run `prototype --help`, `prototype demo`, and `prototype evaluate --json`.
 4. Run `prototype validate` only against already-acquired, authorized, pinned checkouts; do not fetch or add data as part of this guide.
-5. Record the resulting run ID and replay it with `prototype reproduce RUN_ID`.
+5. Find the demo run ID under `$env:PROTOTYPE_DATA_ROOT\runs` by checking each `metadata.json` for `"command": "demo"`; replay that ID with `prototype reproduce RUN_ID`. The [CLI guide](prototype-cli.md) includes a PowerShell example that selects the latest demo run rather than an arbitrary run.
 6. Run the test suite from the project root: `python -m unittest discover -s tests -v`.
 7. Preserve command output, release manifest, and environment metadata. Do not commit run records, source-derived artifacts, or private data.
 

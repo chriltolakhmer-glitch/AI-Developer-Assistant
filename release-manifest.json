@@ -1,11 +1,11 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "status": "RELEASED RESEARCH PROTOTYPE",
   "research_status": "REPRODUCIBLE",
   "benchmark_status": "FUTURE WORK",
   "release_date": "2026-09-28",
-  "git_tag": "v0.1.0",
-  "git_sha": "89e697a34d2a3aa8e6f0939f2d0b9b6401b859ba",
+  "git_tag": "v0.1.1",
+  "source_git_sha": "14dfd9d8574c7c809d5c63bb80be01321ef76c59",
   "git_worktree_dirty": false,
   "python": ">=3.11",
   "tested_environment": {
@@ -30,7 +30,7 @@
     "result": "passed",
     "passed": 142,
     "skipped": 0,
-    "model_cache": "existing pinned offline cache; HF_HUB_OFFLINE=1"
+    "model_cache": "pinned offline cache; HF_HUB_OFFLINE=1"
   },
   "clean_install_checks": {
     "pip_install_lock": "passed",
@@ -54,5 +54,5 @@
     "evaluation_methodology": "unchanged",
     "expansion_started": false
   },
-  "provenance_note": "git_sha identifies the clean source commit targeted by git_tag. This manifest is regenerated and committed after tagging."
+  "provenance_note": "This committed manifest records source_git_sha because a commit cannot contain its own commit SHA without a self-referential hash. After v0.1.1 is tagged, the GitHub Release asset named release-manifest.json is generated with git_sha set to the exact commit resolved by git_tag. Verify that asset against git rev-parse v0.1.1^{commit}."
 }

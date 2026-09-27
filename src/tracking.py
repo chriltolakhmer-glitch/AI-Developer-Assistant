@@ -19,7 +19,7 @@ import yaml
 from src.config import PrototypeConfig
 
 
-SOFTWARE_VERSION = "0.1.0"
+SOFTWARE_VERSION = "0.1.1"
 LOGGER = logging.getLogger("prototype")
 
 
