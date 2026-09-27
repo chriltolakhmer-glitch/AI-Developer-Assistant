@@ -30,20 +30,20 @@ This report consolidates the committed approval records. It records documented s
 
 | Gate | Status across corpus | Evidence state |
 |---|---|---|
-| Exact checkout identity and read-only verification | **OPEN** | Each record has a pending checkout evidence field; no attributable repository-specific confirmation is committed. |
-| Secret / credential scan and candidate disposition | **OPEN / BLOCKED** | The documented scan baseline reports eight unresolved candidates: six Flask, one pytest, and one Sphinx. No committed record documents disposition of every candidate. |
+| Exact checkout identity and read-only verification | **OPEN / PARTIAL** | Humanize has committed evidence of exact detached, clean SHA identity; the other eight records remain pending, and identity evidence alone does not authorize processing. |
+| Secret / credential scan and candidate disposition | **OPEN / BLOCKED** | Humanize has saved zero-result reports with recorded digests, but scan scope/configuration and candidate disposition are not fully evidenced. The corpus baseline still reports eight unresolved candidates: six Flask, one pytest, and one Sphinx. |
 | Git-history coverage | **BLOCKED** | Records document shallow single-commit coverage. Sphinx also has an unsupported `.dot` history-scan error. No accepted limitation or remediation is recorded. |
 | Personal / confidential-data review | **NOT STARTED** | No designated reviewer, reviewed scope, method, date, result, or external evidence reference is recorded. |
 | License and file-level notices | **IN PROGRESS / BLOCKED** | Root license screening is recorded, but file-level review remains incomplete. Mypy has MIT/PSF-2.0 qualifications; Sphinx requires file-level notice review. |
-| Eligible-file manifest and exclusions | **IN PROGRESS** | Aggregate counts are documented, but exact-SHA manifest evidence, exclusions, and external digest remain pending in every record. |
-| Local handling controls | **NOT STARTED** | Storage, access, offline/telemetry, backup, retention, and deletion evidence remains pending. |
+| Eligible-file manifest and exclusions | **IN PROGRESS / PARTIAL** | Humanize has exact-SHA manifest identity/count reconciliation and an external digest; detailed manifest and privacy approval remain outside Git. Other repositories remain pending. |
+| Local handling controls | **NOT STARTED / PARTIAL** | Humanize has documented external local storage, but access, offline/telemetry, backup, retention, and deletion evidence remains incomplete. |
 | Historical exposure or incident review | **OPEN** | Humanize has a documented unresolved historical data-handling conflict; other records still require a determination or explicit not-applicable rationale. |
 | Attributable approval decision | **NOT RECORDED** | No record contains a named authorized approver, explicit decision, date, signature/attestation, and approval evidence reference. |
 
 ## Repository-specific blockers
 
 - **python-dotenv, validators, httpx, and Rich:** required scan disposition, history, personal/confidential-data, notice, manifest, handling, and attributable approval evidence remain pending.
-- **humanize:** all ordinary gates remain unresolved, and the historical data-handling assessment is additionally blocked. The existing pilot remains not approved.
+- **humanize:** exact identity, saved scan-result digests, root MIT evidence, and manifest identity/counts are documented. History, personal/confidential-data, file-level notices, handling, historical exposure, and attributable approval remain blocked; the pilot remains not approved.
 - **Flask:** six aggregate scan candidates remain undispositioned, in addition to the shared open gates.
 - **pytest:** one aggregate scan candidate remains undispositioned, in addition to the shared open gates.
 - **mypy:** file-level MIT/PSF-2.0 applicability and attribution/retention review is blocked, in addition to the shared open gates.

@@ -1,6 +1,6 @@
 # Repository Approval Record — humanize
 
-**Record state:** OPEN — repository-specific approval not recorded.
+**Record state:** EVIDENCE PARTIALLY CLOSED — repository-specific approval not recorded.
 
 ## A. Repository and snapshot identity
 
@@ -11,16 +11,16 @@
 | Pinned commit SHA | `392aef707c0e74341ab4a51420984e9ea6b566c5` |
 | Snapshot set / protocol version | `corpus-snapshot-v1` / `phase4.5-python-v1` |
 | Review record ID | `repository-approval-humanize-corpus-snapshot-v1` |
-| Review date (UTC) | `[PENDING HUMAN CONFIRMATION: repository-specific review date]` |
-| Checkout identity evidence | `[PENDING HUMAN CONFIRMATION: local read-only checkout evidence/digest]` |
+| Review date (UTC) | `2026-09-27` (committed Phase 8.8 review date) |
+| Checkout identity evidence | `PASS for identity only: Phase 8.8 records the detached, clean checkout at the exact SHA; detailed checkout evidence remains external.` |
 
 ## B. License, language, and size scope
 
 | Field | Value |
 |---|---|
 | Root license identifier | `MIT` (screening record; not legal clearance) |
-| License file / evidence | `LICENCE`; detailed evidence remains external and requires human review |
-| Per-file notices / terms review | `IN PROGRESS — root screening recorded; human file-level review pending` |
+| License file / evidence | `LICENCE`; root MIT evidence confirmed in the committed Phase 8.8 review; detailed evidence remains external |
+| Per-file notices / terms review | `IN PROGRESS — root evidence confirmed; attributable file-level review remains pending` |
 | GitHub language metadata | `Python, Shell` |
 | Approved study language scope | `Python only` |
 | File-filter / manifest version | `phase4.5-python-v1` |
@@ -32,13 +32,13 @@
 
 | Review gate | Status | Reviewer, date, scope and safe evidence reference | Exclusions / residual risk |
 |---|---|---|---|
-| Secret / credential scan of exact pinned snapshot | `IN PROGRESS` | `[PENDING HUMAN CONFIRMATION: scanner/version, exact SHA, date, external report reference/digest]` | Humanize pilot review remains explicitly unresolved |
+| Secret / credential scan of exact pinned snapshot | `IN PROGRESS` | `Phase 8.8 records Gitleaks 8.30.1 saved snapshot/history reports with 0 reported findings and digest `37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570`; scan command/configuration and precise scope remain unverified.` | Empty saved reports are not a complete clearance or personal-data review |
 | Available Git-history scan and coverage | `BLOCKED` | Existing records describe shallow single-commit coverage; `[PENDING HUMAN CONFIRMATION: reviewer and accepted limitation]` | History coverage unresolved |
 | Candidate finding disposition | `BLOCKED` | `[PENDING HUMAN CONFIRMATION: disposition record for every candidate]` | Existing pilot record has no attributable repository-specific disposition |
 | Personal / confidential-data review | `NOT STARTED` | `[PENDING HUMAN CONFIRMATION: designated reviewer, scope, method, date, external reference]` | Review required |
 | License terms / file-level notices | `IN PROGRESS` | `[PENDING HUMAN CONFIRMATION: reviewer, scope, attribution/retention assessment]` | Applicable notices unresolved |
-| Eligible-file manifest and exclusions | `IN PROGRESS` | Screening counts are recorded; `[PENDING HUMAN CONFIRMATION: exact-SHA manifest digest and reconciliation]` | Detailed manifest remains external |
-| Local handling controls | `NOT STARTED` | `[PENDING HUMAN CONFIRMATION: approved storage, access, telemetry, backup, retention, deletion evidence]` | Handling authorization unresolved |
+| Eligible-file manifest and exclusions | `PASS — artifact identity/counts only` | `Phase 8.8 records the external manifest for the exact SHA, filter `phase4.5-python-v1`, 13 eligible files, 2,915 LOC, 0 exclusions, and digest `a9f35063535978fd5fe099506c2152922dd42bb0bf95bc56df10de8396a32868`.` | Detailed manifest remains external; this does not close privacy approval |
+| Local handling controls | `IN PROGRESS` | `Committed records identify external local storage, but pilot-specific access, backup, telemetry/offline, retention, and deletion evidence is incomplete.` | Prior ACL concern remains unresolved |
 | Historical exposure or other incident review, if applicable | `BLOCKED` | `[PENDING HUMAN CONFIRMATION: retrospective assessment and authorized reviewer]` | Prior records identify an unresolved data-handling history conflict |
 
 ### Source handling rules for this snapshot
@@ -61,7 +61,7 @@
 
 **Conditions, exclusions, and stop triggers:** `[PENDING HUMAN CONFIRMATION: specific non-sensitive terms and stop triggers]`
 
-**Residual risks and accepted limitations:** `Unresolved privacy, history, license/notice, manifest, handling, and historical-exposure gates; no implicit acceptance.`
+**Residual risks and accepted limitations:** `Identity, saved scan-result digests, root MIT evidence, and manifest identity/counts are documented. History scope, personal/confidential-data review, file-level notices, handling controls, historical exposure, and attributable approval remain unresolved; no implicit acceptance.`
 
 **Approval evidence reference / digest:** `[PENDING HUMAN CONFIRMATION: controlled external approval record/digest]`
 
