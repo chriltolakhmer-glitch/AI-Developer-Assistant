@@ -53,3 +53,13 @@ The pilot repository is authorized for controlled execution only. The pilot cont
 **Full benchmark expansion:** **NOT ALLOWED.** The pilot must be reviewed, frozen, and excluded from the final benchmark if it influences instructions or tuning. Passing implementation tests or structural validation does not authorize expansion.
 
 See [annotation-pilot-plan.md](annotation-pilot-plan.md), [repository-approval-thesis-risk-acceptance.md](repository-approval-thesis-risk-acceptance.md), [repository-approvals/humanize.md](repository-approvals/humanize.md), [repository-approval-status-report.md](repository-approval-status-report.md), and [benchmark-schema.md](benchmark-schema.md).
+
+## Local review artifacts (Phase 13.x cleanup)
+
+The external pilot workspace now includes a `README.md`, `questions.md` (human-readable
+question view), and `artifact-index.md` (current/historical file lifecycle) alongside
+the existing `annotation-template.json`, `pilot-benchmark-draft-v1.json`, and
+`chunk-map.txt`. A `validate_pilot.py` script checks the 12-case count, unique question
+IDs, `questions.md`/`annotation-template.json` consistency, and chunk-ID coverage. These
+are local-only organizational aids for the solo reviewer; no question content, source
+spans, or chunk data from this cleanup is stored in this repository.
