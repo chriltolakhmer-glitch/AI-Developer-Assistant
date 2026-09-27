@@ -25,7 +25,7 @@ This Master's thesis project builds and validates a working benchmark/retrieval 
 
 The release packages the existing ingestion, Python parsing/chunking, indexing, retrieval, evaluation and validation utilities. The research workflow is reproducible; additional repositories, questions, annotation rounds, retrieval tuning/strategies, new experiments and scaling studies remain outside scope.
 
-See the [release guide](docs/research/release-guide.md) for clean installation, commands, tests and reproduction. The [Phase 26 external-user validation report](docs/research/phase26-external-user-validation.md) records the earlier v0.1.0 blocker; the [v0.1.1 release page](https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/tag/v0.1.1) will host the exact-tag manifest and external-user verification report. The [software prototype scope](docs/research/software-prototype-scope.md) documents component boundaries. Humanize remains frozen; benchmark expansion is deferred. This is not a production release.
+See the [release guide](docs/research/release-guide.md) for clean installation, commands, tests and reproduction. The [Phase 26 external-user validation report](docs/research/phase26-external-user-validation.md) records the earlier v0.1.0 blocker, and the [Phase 26.1 verification report](docs/research/phase26.1-release-verification.md) records the verified v0.1.1 public release. The [v0.1.1 release page](https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/tag/v0.1.1) hosts the exact-tag manifest asset. The [software prototype scope](docs/research/software-prototype-scope.md) documents component boundaries. Humanize remains frozen; benchmark expansion is deferred. This is not a production release.
 
 ## Get the Release
 

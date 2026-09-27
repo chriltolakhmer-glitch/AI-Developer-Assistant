@@ -1,7 +1,7 @@
 # Phase 26 — External User Validation
 
 **Date:** 2026-09-28
-**Status:** **BLOCKED for an external v0.1.0 clone; isolated tag-checkout smoke validation passed.**
+**Status:** **SUPERSEDED by the verified v0.1.1 public release.**
 **Scope:** Installation, README walkthrough, demo usability, run reproduction, and documentation feedback only.
 
 No datasets, repositories, benchmark questions, annotations, retrieval behavior, or evaluation methodology were added or changed. Validation run records and the temporary checkout were kept outside this repository.
@@ -10,7 +10,7 @@ No datasets, repositories, benchmark questions, annotations, retrieval behavior,
 
 The documented package workflow succeeds in a clean Python 3.14.7 virtual environment when run from an isolated shallow checkout of the local `v0.1.0` Git tag. The pinned lock, package install, `pip check`, CLI help, demo, JSON evaluation smoke check, missing-corpus validation, and demo reproduction all behaved as documented. The full suite ran 142 tests; two model-backed integration tests skipped because no offline model cache was supplied.
 
-This is **not** a passing fresh-machine/public-tag test. The public GitHub remote did not advertise `refs/tags/v0.1.0`; a direct clone by that tag failed with `Remote branch v0.1.0 not found in upstream origin`. A shallow clone from the local Git object store was used only to test the release snapshot independently of the working-tree files.
+This was **not** a passing fresh-machine/public-tag test. At the time of Phase 26, the public GitHub remote did not advertise `refs/tags/v0.1.0`; a direct clone by that tag failed with `Remote branch v0.1.0 not found in upstream origin`. A shallow clone from the local Git object store was used only to test the release snapshot independently of the working-tree files. The repository was subsequently made public with the owner's approval, and Phase 26.1 published a corrected v0.1.1 tag. Its anonymous clone/install/reproduction results are in the [Phase 26.1 release verification report](phase26.1-release-verification.md) and the [public GitHub release](https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/tag/v0.1.1).
 
 The local tag also contains a release-manifest provenance mismatch: tag `v0.1.0` resolves to commit `89e697a34d2a3aa8e6f0939f2d0b9b6401b859ba`, while the manifest inside that tag records `9a103131690ee42bb621de37aa655a429dde7376`. The current local `main` checkout has a later manifest correction, but that later file is not part of the tagged snapshot. Do not rewrite a published tag; decide on a corrected, immutable release version and publish it before claiming that a new user can clone v0.1.0.
 
@@ -48,9 +48,6 @@ The direct user journey is documented in [README](../../README.md), with additio
 
 ## Required follow-up before declaring success
 
-1. Publish an immutable release tag to the intended public remote and confirm `git ls-remote --tags` lists it.
-2. Resolve the v0.1.0 tag/manifest SHA mismatch. Preserve the existing tag if it has been distributed; use a corrected follow-up release rather than silently moving a published tag.
-3. Repeat the clone, install, CLI, and run-reproduction checks against the public remote checkout, not a local Git object store.
-4. Record model-backed test skips as prerequisites unless the pinned offline cache is available; do not download model data as an implicit part of this smoke walkthrough.
+The v0.1.0 issue is closed for new users by publishing the immutable v0.1.1 tag; the old tag remains unchanged. See the Phase 26.1 report for the new release evidence. Model-backed tests still require the pinned offline cache; do not download model data as an implicit part of the walkthrough.
 
-**Phase 26 disposition:** Documentation friction was corrected. External-user success remains **unproven and blocked** until the release artifact is remotely cloneable and its manifest identifies the exact tagged commit.
+**Phase 26 disposition:** Documentation friction was corrected. Phase 26.1 supersedes the outstanding release-publication follow-ups for new users.
