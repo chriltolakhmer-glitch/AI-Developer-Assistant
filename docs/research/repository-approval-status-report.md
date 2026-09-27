@@ -1,6 +1,6 @@
 # Phase 12.2 — Consolidated Repository Approval Status
 
-**Status:** OPEN — no repository-specific approval has been recorded.
+**Status:** **APPROVED WITH THESIS SCOPE LIMITATIONS** — thesis-level residual-risk acceptance recorded; no repository-specific approval has been granted.
 
 **Review baseline:** Commit `ec21993` / nine records created in [repository-approvals](repository-approvals/).
 
@@ -8,7 +8,11 @@
 
 **Study scope:** Python source files only, using `phase4.5-python-v1`.
 
-This report consolidates the committed approval records. It records documented status only; it does not create approval, replace external evidence, or authorize source inspection, annotation, indexing, embedding, retrieval, or experiments.
+This report consolidates the committed approval records and the Phase 12.5 [thesis scope risk acceptance](repository-approval-thesis-risk-acceptance.md). The changed state authorizes only controlled local thesis experimentation within that decision's limits. It does not create repository-specific clearance, replace external evidence, or authorize benchmark annotation, external processing, production use, or publication.
+
+**Thesis experimentation state:** **AUTHORIZED WITH THESIS SCOPE LIMITATIONS**.
+
+**Repository-specific approval state:** **BLOCKED / NOT RECORDED** for all nine snapshots.
 
 ## Approval matrix
 
@@ -53,10 +57,14 @@ This report consolidates the committed approval records. It records documented s
 
 No repository is marked `APPROVED` or `APPROVED WITH CONTROLS`. The committed records contain no evidence that satisfies the attributable approval requirement for any exact snapshot and purpose. Automated preprocessing results, tests, public availability, root license screening, and this consolidated report do not close the repository-specific gates.
 
-**Phase 13 benchmark annotation:** **LOCKED — NOT UNLOCKED.**
+The Phase 12.5 decision accepts residual risk only for local, public-corpus, thesis-only experimentation with sensitive-file exclusions, local/offline handling, and the documented limitations. It does not convert blocked repository rows into approvals.
 
-Do not inspect source for benchmark authoring, consume chunk inventories for annotation, create questions or labels, or begin annotation handoff until each applicable repository record has completed evidence, an explicit attributable decision covering manual annotation for the exact SHA and scope, and a ready handoff state.
+**Phase 13 benchmark annotation:** **DISABLED — NOT UNLOCKED.**
 
-**Retrieval/indexing/embedding/experiments:** **NOT AUTHORIZED by these records.**
+Do not inspect source for benchmark authoring, consume chunk inventories for annotation, create questions or labels, or begin annotation handoff. Annotation requires a separate applicable repository approval, explicit attributable decision covering manual annotation for the exact SHA and scope, and a ready handoff state.
+
+**Local thesis experimentation:** **AUTHORIZED WITH THESIS SCOPE LIMITATIONS** under [repository-approval-thesis-risk-acceptance.md](repository-approval-thesis-risk-acceptance.md).
+
+**External processing, production use, and publication:** **NOT AUTHORIZED.**
 
 See [repository-approval-workflow.md](repository-approval-workflow.md), [repository-approval-template.md](repository-approval-template.md), [corpus-final-selection.md](corpus-final-selection.md), and the individual [approval records](repository-approvals/).
