@@ -1,8 +1,9 @@
-# Phase 8.10 — Complete Privacy Evidence Package and Final Approval Decision
+# Phase 8.11 — Privacy Remediation and Human Attestation
 
 **Approval decision date:** 2026-09-27
-**Phase 8.10 review date:** 2026-09-27
-**Thesis repository baseline:** `b947c76865ac7dc02a6b734ae8c57d149df14faf`
+**Phase 8.10 evidence review date:** 2026-09-27
+**Phase 8.11 documentation update date:** 2026-09-27
+**Thesis repository baseline:** `6d9bc34c88b227194730e0c0d6f34ad9b7164e3d`
 **Pilot repository:** `python-humanize/humanize`
 **Required snapshot:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
 **Reviewer name (user-designated):** Alot
@@ -11,9 +12,9 @@
 
 ## Decision summary
 
-Phase 8.10 rechecked the pinned snapshot, external artifacts, manifest, tracked notice filenames, and local storage ACLs. All 13 manifest file hashes match the pinned Git blob bytes. The one-commit shallow-history limit is now explicitly documented. A preliminary AI-assisted screen of the eligible Python scope reported no obvious credential/contact/identity indicators but flagged three formatted-number candidates in one file for human review. The root MIT notice is present; no separate conventionally named notice/attribution file or file-level license marker was found in the checked eligible scope. These are screening results, not completed human review or legal clearance.
+Phase 8.10 rechecked the pinned snapshot, external artifacts, manifest, tracked notice filenames, and local storage ACLs. All 13 manifest file hashes match the pinned Git blob bytes. The one-commit shallow-history limit is documented. A preliminary AI-assisted screen of the eligible Python scope reported no obvious credential/contact/identity indicators but flagged three formatted-number candidates in one file for human review. The root MIT notice is present; no separate conventionally named notice/attribution file or file-level license marker was found in the checked eligible scope. These are screening results, not completed human review or legal clearance.
 
-Reviewer name and role are recorded above as supplied by the project owner. Source content from the 13 eligible files was provided for AI-assisted screening during this session; service-side processing, data residency, and retention are not verified. Therefore, this review cannot attest that source stayed within the local environment. Treat this as a potential local-only policy deviation for the designated reviewer to assess. The checked storage directories inherit access for the local `BUILTIN\Users` group, including read/execute and create/append rights, so user-restricted access is not established. The remaining approval gates are not supported by attributable evidence. The history-scan provenance, human disposition of candidate data, complete human notice/terms review, suitable handling-controls attestation, and an authorized privacy approver's signed decision remain outstanding.
+Reviewer name and role are recorded above as supplied by the project owner. Source content from the 13 eligible files was provided for AI-assisted screening in Phase 8.10; service-side processing, data residency, and retention are not verified. Phase 8.11 was documentation-only and did not access or submit pilot source to AI services. The prior source processing remains a potential local-only policy deviation for the designated reviewer to assess. The checked storage directories inherit access for the local `BUILTIN\Users` group, including read/execute and create/append rights, so user-restricted access is not established. The remaining approval gates are not supported by attributable evidence. The history-scan provenance, human disposition of candidate data, complete human notice/terms review, suitable handling-controls attestation, and an authorized privacy approver's signed decision remain outstanding.
 
 This is an evidence decision, not a finding that the repository contains personal/confidential data or that it does not. **No approval is granted.** No benchmark questions or other benchmark data were created for this phase.
 
@@ -31,6 +32,12 @@ This is an evidence decision, not a finding that the repository contains persona
 | Handling controls | Observed locations are `C:\Apps\Temp\Phase5.4\corpus\humanize`, `C:\Apps\Temp\Phase5.4\reports\privacy`, and `C:\Apps\Temp\Phase8\benchmark\pilot\python-humanize`. ACLs on the checkout and pilot evidence directory inherit access for `BUILTIN\Users` (read/execute plus create/append rights), as well as SYSTEM and Administrators. Source content from the 13 eligible files was provided for AI-assisted screening during this session; service-side processing, data residency, and retention are not verified. | **NOT ATTESTED / CONTROL GAP.** Access is not restricted to the named reviewer by the observed ACLs. No attestation covers source handling by the AI service, backups, retention, or deletion. Do not claim all source processing remained local. |
 | Authorized approval | Reviewer name and role are recorded above as supplied by the project owner. No record establishes an authorized privacy approver's signed/attributable decision or residual-risk acceptance. | **NOT GRANTED.** Reviewer metadata does not constitute an approval attestation. |
 
+## Phase 8.11 remediation package status
+
+Created the [privacy remediation plan](privacy-remediation-plan.md) and four blank forms: [candidate data disposition](templates/privacy/candidate-data-disposition-template.md), [notice/license review](templates/privacy/notice-license-review-template.md), [handling controls](templates/privacy/handling-controls-template.md), and [AI processing policy decision](templates/privacy/ai-processing-policy-decision-template.md).
+
+These documents assign proposed owners and specify required evidence; **they are templates, not completed reviews or attestations**. No candidate disposition, human notice review, access-control remediation, AI-processing policy disposition, full-history scan evidence, or approval sign-off was supplied in Phase 8.11. The privacy decision therefore remains **NOT APPROVED**. No source code was accessed or submitted to AI services during this documentation-only phase.
+
 ## Why approval cannot be recorded
 
 Approval requires evidence about people, applicable terms, data handling, and accepted risk—not only artifact hashes or automated scan output. Phase 8.10 adds useful scoped checks, but in particular:
@@ -45,7 +52,7 @@ These gates remain unresolved; therefore the status must remain **NOT APPROVED**
 
 ## Required evidence before reconsideration
 
-A designated, authorized human reviewer must provide or perform, on the controlled local system:
+A designated, authorized human reviewer must provide or perform, on the controlled local system, using the blank forms linked above:
 
 1. A provenance record for secret scans (tool/version, command, configuration, exact snapshot and history refs/range, output digest, and finding dispositions), with full required history scanned or the one-commit limitation explicitly justified and accepted by an authorized approver.
 2. Alot or another designated human reviewer must adjudicate the three formatted-number candidates on the controlled local system and complete the personal/confidential-data review for the exact snapshot and eligible scope, documenting identity/role, date, methods/categories, result, and exclusions. Assess and document the AI-agent source access under the applicable local-only research policy.
@@ -57,12 +64,17 @@ Keep raw scan outputs, detailed findings, source-derived notes, and per-file inv
 
 ## Next allowed activity
 
-Only non-annotation privacy evidence collection and documentation may proceed: the designated human reviewer may complete the listed checks locally, after correcting/reviewing access controls and assessing the AI-agent source access. Do not submit further pilot source to AI or other hosted services while the local-only handling question is unresolved. Until an authorized approval is recorded, do **not** inspect the pilot for benchmark annotation, create or consume a chunk inventory, create questions, query IDs, gold chunk references or relevance labels, or run indexing, embedding, retrieval, metric, or experiment work.
+Only non-annotation privacy evidence collection and documentation may proceed: the designated human reviewer may complete the listed checks locally, after correcting/reviewing access controls and assessing the prior AI-agent source access. Do not submit pilot source to AI or other hosted services while the local-only handling question is unresolved. Until an authorized approval is recorded, do **not** inspect the pilot for benchmark annotation, create or consume a chunk inventory, create questions, query IDs, gold chunk references or relevance labels, or run indexing, embedding, retrieval, metric, or experiment work.
 
 This decision applies only to `python-humanize/humanize` at the specified snapshot. It does not clear other corpus repositories or the full benchmark.
 
 ## Related records
 
+- [Phase 8.11 privacy remediation plan](privacy-remediation-plan.md)
+- [Candidate data disposition template](templates/privacy/candidate-data-disposition-template.md)
+- [Notice/license review template](templates/privacy/notice-license-review-template.md)
+- [Handling controls template](templates/privacy/handling-controls-template.md)
+- [AI processing policy decision template](templates/privacy/ai-processing-policy-decision-template.md)
 - [Phase 8.8 final pilot privacy review](pilot-privacy-final-review.md)
 - [Phase 8.7 pilot privacy review and approval record](pilot-privacy-approval.md)
 - [Phase 8.6 pilot privacy clearance record](pilot-privacy-clearance.md)
