@@ -1,9 +1,9 @@
-# Phase 8.11 — Privacy Remediation and Human Attestation
+# Phase 8.12 — Local Privacy Attestations and Evidence Status
 
 **Approval decision date:** 2026-09-27
 **Phase 8.10 evidence review date:** 2026-09-27
-**Phase 8.11 documentation update date:** 2026-09-27
-**Thesis repository baseline:** `6d9bc34c88b227194730e0c0d6f34ad9b7164e3d`
+**Phase 8.12 documentation update date:** 2026-09-27
+**Thesis repository baseline:** `7e801fc8f034df97b24673eadf4bff0eadf09ef9`
 **Pilot repository:** `python-humanize/humanize`
 **Required snapshot:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
 **Reviewer name (user-designated):** Alot
@@ -36,7 +36,21 @@ This is an evidence decision, not a finding that the repository contains persona
 
 Created the [privacy remediation plan](privacy-remediation-plan.md) and four blank forms: [candidate data disposition](templates/privacy/candidate-data-disposition-template.md), [notice/license review](templates/privacy/notice-license-review-template.md), [handling controls](templates/privacy/handling-controls-template.md), and [AI processing policy decision](templates/privacy/ai-processing-policy-decision-template.md).
 
-These documents assign proposed owners and specify required evidence; **they are templates, not completed reviews or attestations**. No candidate disposition, human notice review, access-control remediation, AI-processing policy disposition, full-history scan evidence, or approval sign-off was supplied in Phase 8.11. The privacy decision therefore remains **NOT APPROVED**. No source code was accessed or submitted to AI services during this documentation-only phase.
+These documents assign proposed owners and specify required evidence; **they are templates, not completed reviews or attestations**. No candidate disposition, human notice review, access-control remediation, AI-processing policy disposition, full-history scan evidence, or approval sign-off was supplied in Phase 8.11. The privacy decision therefore remains **NOT APPROVED**.
+
+## Phase 8.12 evidence status
+
+Phase 8.12 was documentation-only. **No pilot source code was accessed or submitted to AI services during this phase.** The available evidence does not permit completion of the requested human attestations:
+
+| Review | Phase 8.12 result | Remaining requirement |
+|---|---|---|
+| Candidate data disposition | Not completed. The prior aggregate screen records three formatted-number candidates but does not contain approved file/line locations, classifications, reviewer decisions, or justifications. No source was reopened to recover them. | Alot must inspect the candidates locally, fill the [candidate disposition form](templates/privacy/candidate-data-disposition-template.md) in a properly restricted location, record classifications/decisions/justifications, and attest/date it. Keep candidate locations and values out of Git and chat. |
+| Notice/license review | Not completed as a human attestation. The Phase 8.10 filename/header inventory and root MIT-license observation remain preliminary. The [notice/license form](templates/privacy/notice-license-review-template.md) remains blank. | Alot must verify applicable LICENSE/LICENCE, NOTICE, COPYRIGHT, attribution and eligible-file conditions locally, record obligations/exclusions, and sign/date the completed form; seek legal/owner review if required. |
+| Handling controls | Not attested. Previously observed folders inherit `BUILTIN\Users` read/execute and create/append rights; no access changes or lifecycle attestations were made. The [handling controls form](templates/privacy/handling-controls-template.md) remains blank. | Restrict access through an authorized administrator, then record effective permissions, owner, storage, external-processing decision, encryption/backups, retention, deletion, and sign/date the form. Assess the prior AI-agent source access. |
+| AI processing policy | [Phase 8.12 policy decision](pilot-ai-processing-policy-decision.md) records hosted AI processing of pilot source/source-derived data as **NOT ALLOWED** under ADR-008 and the current instruction. | The decision does not resolve the prior Phase 8.10 AI-agent handling event. Alot and the appropriate privacy authority must assess service-side processing, residency, retention, and policy disposition; no exception is approved. |
+| History and final approval | The checkout was previously verified shallow with one reachable commit; full history was not reviewed. No new scan, risk acceptance, signed review package, or authorized final decision was provided. | Record scanner provenance and full available history coverage, or obtain authorized written acceptance of the limitation; then submit the complete evidence package for a signed, attributable approval decision. |
+
+The [Phase 8.12 remediation plan](privacy-remediation-plan.md) tracks the assigned actions and closure evidence. Blank templates and a policy-level `NOT ALLOWED` decision are not evidence that the candidate, notice, handling, or final approval checks have been completed.
 
 ## Why approval cannot be recorded
 
@@ -55,9 +69,9 @@ These gates remain unresolved; therefore the status must remain **NOT APPROVED**
 A designated, authorized human reviewer must provide or perform, on the controlled local system, using the blank forms linked above:
 
 1. A provenance record for secret scans (tool/version, command, configuration, exact snapshot and history refs/range, output digest, and finding dispositions), with full required history scanned or the one-commit limitation explicitly justified and accepted by an authorized approver.
-2. Alot or another designated human reviewer must adjudicate the three formatted-number candidates on the controlled local system and complete the personal/confidential-data review for the exact snapshot and eligible scope, documenting identity/role, date, methods/categories, result, and exclusions. Assess and document the AI-agent source access under the applicable local-only research policy.
+2. Alot or another designated human reviewer must adjudicate the three formatted-number candidates on the controlled local system and complete the personal/confidential-data review for the exact snapshot and eligible scope, documenting identity/role, date, methods/categories, result, and exclusions. The candidate file/line details are not present in the approved aggregate record; retrieve/verify them locally without submitting source to AI services. Assess and document the prior AI-agent source access under the applicable local-only research policy.
 3. A human file-level notice and applicable-terms review, with applicable MIT attribution/retention conditions and excluded files; obtain legal/owner review if required.
-4. An attestation of manifest digest/filter/scope and handling controls. Restrict the data directories to authorized reviewers, document local/offline and telemetry handling, determine/disclose AI-service processing and retention, and attest backups, retention, and deletion.
+4. An attestation of manifest digest/filter/scope and handling controls. Restrict the data directories to authorized reviewers, document local/offline and telemetry handling, determine/disclose prior AI-service processing and retention, and attest backups, retention, and deletion.
 5. Confirmation that the named reviewer is the authorized privacy approver, plus an explicit `APPROVED` or `REJECTED` decision, date, exact snapshot, evidence references/digests, limits/residual risks, and signature or equivalent attributable attestation. The reviewer name and role alone do not provide this sign-off.
 
 Keep raw scan outputs, detailed findings, source-derived notes, and per-file inventory outside Git. Reassess this decision only after the evidence is supplied; a future approval must be recorded as a new attributable decision rather than inferred from this report.
@@ -71,6 +85,7 @@ This decision applies only to `python-humanize/humanize` at the specified snapsh
 ## Related records
 
 - [Phase 8.11 privacy remediation plan](privacy-remediation-plan.md)
+- [Phase 8.12 AI processing policy decision](pilot-ai-processing-policy-decision.md)
 - [Candidate data disposition template](templates/privacy/candidate-data-disposition-template.md)
 - [Notice/license review template](templates/privacy/notice-license-review-template.md)
 - [Handling controls template](templates/privacy/handling-controls-template.md)

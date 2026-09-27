@@ -1,15 +1,16 @@
 # Phase 8.11 — Pilot Privacy Remediation Plan
 
 **Plan date:** 2026-09-27
+**Phase 8.12 update date:** 2026-09-27
 **Repository:** `python-humanize/humanize`
 **Pinned snapshot:** `392aef707c0e74341ab4a51420984e9ea6b566c5`
-**Thesis baseline:** `6d9bc34c88b227194730e0c0d6f34ad9b7164e3d`
+**Thesis baseline:** `7e801fc8f034df97b24673eadf4bff0eadf09ef9`
 **Privacy status:** **NOT APPROVED — annotation remains blocked**
 **Designated reviewer (user-provided):** Alot, Project Owner / Thesis Researcher
 
 ## Scope and safety boundary
 
-This plan closes evidence gaps only. Phase 8.11 has not reopened or transmitted pilot source code, created benchmark questions, annotated chunks, generated a chunk inventory, or run retrieval/evaluation experiments. Completed review forms must be kept in the approved controlled local research-data area; commit only this blank template, protocol-level plan, and non-sensitive aggregate status. Do not place source excerpts, candidate values, line-level personal data, or per-file inventory in this Git repository.
+This plan closes evidence gaps only. Phases 8.11 and 8.12 have not reopened or transmitted pilot source code, created benchmark questions, annotated chunks, generated a chunk inventory, or run retrieval/evaluation experiments. Phase 8.12 did not use pilot source with AI services. Completed review forms must be kept in an approved controlled local research-data area; commit only blank templates, policy-level records, and non-sensitive aggregate status. Do not place source excerpts, candidate values, line-level personal data, or per-file inventory in this Git repository.
 
 Under [ADR-008](../decisions/ADR-008-source-code-privacy.md), hosted LLM/chat and other services that receive source or source-derived research data are **not allowed** for the primary study. Phase 8.10 recorded that source content was made available to an AI analysis agent, while service-side handling and data residency are unknown. Treat this as a potential policy deviation requiring assessment; do not send additional pilot source to AI or hosted services.
 
@@ -21,8 +22,18 @@ Under [ADR-008](../decisions/ADR-008-source-code-privacy.md), hosted LLM/chat an
 | P-1 | The prior preliminary AI screen flagged three formatted-number candidates in one eligible file. They have not been adjudicated by the named human reviewer. | Alot reviews each candidate locally against its surrounding context, records the file and line/location in the restricted form, selects a decision, and gives a concise justification. Keep the completed form outside Git. | Alot | Completed [candidate data disposition form](templates/privacy/candidate-data-disposition-template.md) with date, reviewer, decisions, justifications, and evidence reference; no unresolved candidate | **OPEN** |
 | N-1 | Preliminary filename/header inventory found root `LICENCE` (MIT) and no conventional separate notice/attribution filename or common license header marker in the eligible Python scope. This is not a complete human/legal terms review. | Alot checks `LICENSE`/`LICENCE`, `NOTICE`, `COPYRIGHT`, and any authors/contributors/attribution material, then reviews applicable notices for the eligible scope. Record obligations, exclusions, attribution, and retention conditions. Obtain legal or repository-owner review if required. | Alot; legal/repository owner reviewer if required | Completed [notice/license review form](templates/privacy/notice-license-review-template.md), evidence references, and resolution of every applicable condition | **OPEN** |
 | C-1 | The checked checkout and pilot-evidence directories inherit `BUILTIN\Users` read/execute and create/append rights; reviewer-only access is not established. Backup, retention, deletion, and encryption controls are not attested. | Move or retain pilot materials only in the institution-approved local research-data location. Restrict access to named authorized reviewers, verify effective ACLs, document encryption and backups, define retention/deletion, and record whether source or derivatives leave the local boundary. Do not change machine-wide permissions without an authorized administrator. | Alot; authorized workstation administrator for ACL changes | Completed [handling controls form](templates/privacy/handling-controls-template.md), before/after access evidence, approved storage location, retention/deletion procedure, and responsible person's attestation | **OPEN** |
-| A-1 | Phase 8.10 used an AI analysis agent on eligible source despite the local-only research policy. Service-side processing, residency, retention, and deletion are not verified. | Do not further submit pilot source or source-derived details to AI/hosted services. Alot and the institutional privacy authority/research supervisor assess this event, determine what service/provider records are available, and document the policy disposition. Any exception must be prospective and separately approved before any transfer. | Alot; institutional privacy authority/research supervisor for policy disposition | Completed [AI processing policy decision form](templates/privacy/ai-processing-policy-decision-template.md), applicable provider/data-handling evidence, and documented incident/exception disposition | **OPEN** |
+| A-1 | Phase 8.10 used an AI analysis agent on eligible source despite the local-only research policy. Service-side processing, residency, retention, and deletion are not verified. Phase 8.12 records hosted AI source analysis as not allowed, but does not resolve this prior event. | Do not further submit pilot source or source-derived details to AI/hosted services. Alot and the institutional privacy authority/research supervisor assess the prior event, determine what service/provider records are available, and document its policy disposition. Any future exception must be prospective and separately approved before transfer. | Alot; institutional privacy authority/research supervisor for policy disposition | [Phase 8.12 AI policy decision](pilot-ai-processing-policy-decision.md), applicable provider/data-handling evidence if available, and documented retrospective event/incident disposition | **OPEN — prior event assessment** |
 | D-1 | Reviewer name/role are recorded, but no completed review package or attributable authorized approval is present. | After H-1, P-1, N-1, C-1, and A-1 are resolved, the authorized privacy approver reviews the complete evidence and issues a dated, explicit decision for this exact snapshot. | Alot as designated reviewer; authorized privacy approver (identity/authority to be confirmed) | Signed/attributable decision naming reviewer/approver, role, date, snapshot, evidence references/digests, exclusions, residual risks, and `APPROVED` or `REJECTED` outcome | **OPEN — final gate** |
+
+## Phase 8.12 documentation check-in
+
+This is a status update, not closure evidence or a human attestation:
+
+- **Candidate dispositions:** no candidate-level form was completed. The prior aggregate record identifies three formatted-number candidates but does not include approved file/line coordinates or human decisions. Alot must locate and adjudicate them on the controlled local system; no candidate values or locations belong in Git or this chat.
+- **Notice/license review:** the reusable form remains blank. The available Phase 8.10 filename/header inventory is preliminary; Alot still needs to verify the applicable notices, attribution, retention obligations, and any exclusions and attest to the result.
+- **Handling controls:** the reusable form remains blank. Existing observations show `BUILTIN\\Users` access on the identified folders; no permissions were changed and no custody, encryption, backup, retention, deletion, or egress attestation was received.
+- **AI policy:** [the Phase 8.12 policy decision](pilot-ai-processing-policy-decision.md) records hosted AI processing of pilot source/source-derived data as **NOT ALLOWED**, following ADR-008 and the current instruction. It does not resolve the prior Phase 8.10 AI-agent handling event, whose service-side processing remains unknown.
+- **Final approval:** no human-signed review package or authorized approval was provided. Overall status remains **NOT APPROVED**.
 
 ## Required evidence package
 
@@ -46,6 +57,7 @@ Until then, only local privacy remediation and documentation are allowed. Do not
 ## Related records and forms
 
 - [Final pilot privacy approval record](pilot-privacy-approval-final.md)
+- [Phase 8.12 AI processing policy decision](pilot-ai-processing-policy-decision.md)
 - [ADR-008: source-code processing and privacy policy](../decisions/ADR-008-source-code-privacy.md)
 - [Candidate data disposition form](templates/privacy/candidate-data-disposition-template.md)
 - [Notice/license review form](templates/privacy/notice-license-review-template.md)
