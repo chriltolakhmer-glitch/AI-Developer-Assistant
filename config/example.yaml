@@ -1,6 +1,7 @@
 # Copy this file to an external location and pass it with --config.
 # Keep source checkouts, embeddings, indexes, and reports outside the repository.
 data_root: "C:/research/prototype-data"
+developer_workspace: "C:/Users/you/.prototype/developer-workspace"
 corpus_root: "C:/research/prototype-data/corpus"
 validation_output: "C:/research/prototype-data/validation"
 embedding_model_cache: "C:/research/prototype-data/model-cache"

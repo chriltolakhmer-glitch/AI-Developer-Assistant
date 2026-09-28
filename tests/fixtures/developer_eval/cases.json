@@ -1,0 +1,28 @@
+[
+  {
+    "id": "auth-login",
+    "query": "Where is login implemented?",
+    "expected": {
+      "files": ["src/auth/service.py"],
+      "symbols": ["AuthService.login"],
+      "relationships": ["TokenManager"]
+    }
+  },
+  {
+    "id": "api-route",
+    "query": "Where are API routes handled?",
+    "expected": {
+      "files": ["src/api/routes.py"],
+      "symbols": ["login_route"],
+      "relationships": ["AuthService"]
+    }
+  },
+  {
+    "id": "configuration",
+    "query": "Where is authentication configuration loaded?",
+    "expected": {
+      "files": ["src/config.py"],
+      "symbols": ["load_auth_config"]
+    }
+  }
+]

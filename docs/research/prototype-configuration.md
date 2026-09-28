@@ -7,11 +7,11 @@ The prototype selects its base configuration as follows:
 3. Apply supported environment-variable overrides.
 4. Apply command-specific flags, such as `prototype validate --corpus-root PATH`.
 
-The current CLI uses `corpus_root` and `validation_output`. The remaining fields document the frozen local runtime and retrieval contracts so accidental configuration drift fails early.
+Research commands use `corpus_root` and `validation_output`; `prototype local` uses the separate `developer_workspace`. The remaining fields document the pinned local runtime and retrieval contracts so accidental research configuration drift fails early. Older custom YAML files that omit `developer_workspace` receive the separate default `~/.prototype/developer-workspace`.
 
 ## Configuration Files
 
-- [default.yaml](../../config/default.yaml) contains the safe repository defaults.
+- [default.yaml](../../config/default.yaml) contains separate research and developer storage defaults.
 - [example.yaml](../../config/example.yaml) shows an external Windows-style setup.
 
 Copy the example to an external file, then pass it before the subcommand:
@@ -29,6 +29,7 @@ Keep checkouts, model caches, embeddings, indexes, and reports outside the Git r
 | Variable | Configuration field | Example |
 |---|---|---|
 | `PROTOTYPE_DATA_ROOT` | `data_root` | `C:/research/prototype-data` |
+| `PROTOTYPE_DEVELOPER_WORKSPACE` | `developer_workspace` | `C:/Users/you/.prototype/developer-workspace` |
 | `PROTOTYPE_CORPUS_ROOT` | `corpus_root` | `C:/research/prototype-data/corpus` |
 | `PROTOTYPE_VALIDATION_OUTPUT` | `validation_output` | `C:/research/prototype-data/validation` |
 | `EMBEDDING_MODEL_CACHE` | `embedding_model_cache` | `C:/research/model-cache` |
@@ -42,6 +43,14 @@ Keep checkouts, model caches, embeddings, indexes, and reports outside the Git r
 | `PROTOTYPE_RRF_CONSTANT` | `rrf_constant` | `60` |
 
 Boolean values accept `true/false`, `yes/no`, `on/off`, or `1/0`. Integer values must be positive. The loader rejects non-CPU devices and changes to the frozen 384-dimensional, 256-token embedding contract.
+
+## Storage separation
+
+The developer workspace must not overlap `data_root`, `corpus_root`, `validation_output`, or the research `embedding_model_cache`. Configuration loading fails with the conflicting paths and points to `PROTOTYPE_DEVELOPER_WORKSPACE`. Local commands additionally reject a developer workspace inside the source checkout or a repository path overlapping research storage. Research defaults remain under `~/prototype-data`; local indexes, model weights, and local command records default under `~/.prototype/developer-workspace`.
+
+The developer workspace location itself is deliberately omitted from research run configuration records. A local command does not create a research run record at all.
+
+The built-in `prototype local demo` runs entirely in memory and does not create the developer workspace. `scan`, `index`, and `query` create the developer directories on first use.
 
 ## Troubleshooting
 

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "quality-exact-symbol",
+    "query": "AuthService.login",
+    "expected": {
+      "files": ["src/auth/service.py"],
+      "symbols": ["AuthService.login"],
+      "relationships": ["TokenManager", "load_auth_config"]
+    },
+    "allowed_extra_context": ["src/auth/token.py", "src/config.py"],
+    "required_relationships": ["TokenManager", "load_auth_config"],
+    "failure_tolerance": {"allow_extra_files": false, "allow_missing_relationships": false}
+  },
+  {
+    "id": "quality-dependency-trace",
+    "query": "Where does TokenManager.issue format a login token?",
+    "expected": {
+      "files": ["src/auth/token.py", "src/utils/formatting.py"],
+      "symbols": ["TokenManager.issue", "format_token"],
+      "relationships": ["format_token"]
+    },
+    "allowed_extra_context": ["src/auth/service.py"],
+    "required_relationships": ["format_token"],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": false}
+  },
+  {
+    "id": "quality-configuration-discovery",
+    "query": "Where is the authentication issuer configured?",
+    "expected": {
+      "files": ["src/config.py"],
+      "symbols": ["AUTH_ISSUER", "load_auth_config"],
+      "relationships": []
+    },
+    "allowed_extra_context": [],
+    "required_relationships": [],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": true}
+  },
+  {
+    "id": "quality-api-route-trace",
+    "query": "Where does the login API route call authentication?",
+    "expected": {
+      "files": ["src/api/routes.py", "src/auth/service.py"],
+      "symbols": ["login_route", "AuthService.login"],
+      "relationships": ["AuthService"]
+    },
+    "allowed_extra_context": ["src/auth/token.py"],
+    "required_relationships": ["AuthService"],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": false}
+  },
+  {
+    "id": "quality-authentication-flow",
+    "query": "Where are login tokens generated?",
+    "expected": {
+      "files": ["src/auth/service.py", "src/auth/token.py", "src/config.py"],
+      "symbols": ["AuthService.login", "TokenManager.issue", "load_auth_config"],
+      "relationships": ["TokenManager", "load_auth_config", "format_token"]
+    },
+    "allowed_extra_context": ["src/utils/formatting.py", "src/api/routes.py"],
+    "required_relationships": ["TokenManager", "load_auth_config", "format_token"],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": false}
+  },
+  {
+    "id": "quality-database-access",
+    "query": "Where does the application connect to the database?",
+    "expected": {
+      "files": ["src/database.py"],
+      "symbols": ["connect_database", "DatabaseClient.connect"],
+      "relationships": ["DatabaseClient"]
+    },
+    "allowed_extra_context": [],
+    "required_relationships": ["DatabaseClient"],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": false}
+  },
+  {
+    "id": "quality-utility-usage",
+    "query": "Where is the format_token utility used?",
+    "expected": {
+      "files": ["src/auth/token.py", "src/utils/formatting.py"],
+      "symbols": ["TokenManager.issue", "format_token"],
+      "relationships": ["format_token"]
+    },
+    "allowed_extra_context": ["src/auth/service.py"],
+    "required_relationships": ["format_token"],
+    "failure_tolerance": {"allow_extra_files": true, "allow_missing_relationships": false}
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "new-file",
+    "before": {"files": ["src/auth/service.py"], "symbols": ["AuthService.login"]},
+    "after": {"add": {"path": "src/auth/token_service.py", "symbol": "TokenService.issue"}},
+    "checks": ["new symbol discovered", "new location retrievable", "old context not preferred"]
+  },
+  {
+    "id": "modified-file",
+    "before": {"path": "src/auth/service.py", "symbol": "AuthService.login"},
+    "after": {"path": "src/auth/service.py", "symbol": "AuthService.authenticate"},
+    "checks": ["updated symbol indexed", "stale symbol removed"]
+  },
+  {
+    "id": "deleted-file",
+    "before": {"path": "src/auth/token_service.py", "symbol": "TokenService.issue"},
+    "after": {"delete": "src/auth/token_service.py"},
+    "checks": ["deleted file absent", "old chunks invalidated"]
+  },
+  {
+    "id": "dependency-change",
+    "before": {"import": "from src.auth.token import TokenManager"},
+    "after": {"import": "from src.auth.token_service import TokenService"},
+    "checks": ["related context updated", "old relationship removed"]
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "id": "auth-flow",
+  "query": "Where are login tokens generated?",
+  "repository_fixture": "quality_repository",
+  "expected": {
+    "files": ["src/auth/token.py"],
+    "symbols": ["TokenManager.issue"],
+    "relationships": ["format_token"]
+  },
+  "allowed_extra_context": ["src/utils/formatting.py"],
+  "required_relationships": ["format_token"],
+  "failure_tolerance": {},
+  "retrieved": {
+    "files": ["src/auth/token.py"],
+    "symbols": ["TokenManager.issue"]
+  },
+  "ranking": {
+    "order": [{"file": "src/auth/token.py", "symbol": "TokenManager.issue"}],
+    "reasons": [{
+      "file": "src/auth/token.py", "symbol": "TokenManager.issue",
+      "reason": {"context_expansion_reason": "expanded to explicit static relationships"},
+      "explanation": {"signals": ["call_relationship"]}
+    }]
+  },
+  "context": {
+    "files": [{"file_path": "src/auth/token.py", "symbols": ["TokenManager.issue"]}],
+    "expanded_symbols": [{"file_path": "src/utils/formatting.py", "symbol_name": "format_token", "reason": "call"}],
+    "expansion_decisions": [{"file": "src/auth/token.py", "symbol": "TokenManager.issue", "reason": "expanded to explicit static relationships"}],
+    "excluded_context": "Nearby-only chunks omitted.",
+    "suppressed_duplicates": [],
+    "configuration_keys": []
+  }
+}

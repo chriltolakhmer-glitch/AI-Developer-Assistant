@@ -1,0 +1,63 @@
+[
+  {
+    "id": "trust-clear-success",
+    "query": "Where is AuthService.login authentication handled?",
+    "expected": {
+      "files": ["src/auth/service.py"],
+      "symbols": ["AuthService.login"],
+      "relationships": ["TokenManager"]
+    },
+    "expected_behavior": "Return the login method with an explicit symbol signal and the statically visible TokenManager import/call relationship.",
+    "acceptable_limitations": ["Static analysis does not establish runtime dispatch or prove behavior beyond the indexed source."]
+  },
+  {
+    "id": "trust-ambiguous-query",
+    "query": "Where are settings loaded?",
+    "expected": {
+      "files": ["src/config.py"],
+      "symbols": ["load_auth_config"]
+    },
+    "expected_behavior": "Return the matching configuration loader when lexical evidence supports it; explain weak or ambiguous ranking evidence without claiming certainty.",
+    "acceptable_limitations": ["Generic wording can match multiple symbols, and confidence is a local evidence summary rather than correctness probability."]
+  },
+  {
+    "id": "trust-missing-symbol",
+    "query": "Where is LegacyAuth.login implemented?",
+    "expected": {
+      "files": ["src/auth/legacy.py"],
+      "symbols": ["LegacyAuth.login"]
+    },
+    "expected_behavior": "Report both missing file and symbol evidence, and identify that the expected symbol is absent from indexed Python source.",
+    "acceptable_limitations": ["A similarly named dynamic or generated symbol may not be discoverable by static parsing."]
+  },
+  {
+    "id": "trust-unsupported-language",
+    "query": "Where is the browser login handler?",
+    "expected": {
+      "files": ["unsupported/app.ts"],
+      "symbols": ["loginHandler"]
+    },
+    "expected_behavior": "Identify the expected TypeScript file as unsupported by the Python-only index rather than treating it as a Python parse failure.",
+    "acceptable_limitations": ["The current developer index does not parse or retrieve TypeScript source."]
+  },
+  {
+    "id": "trust-stale-index",
+    "query": "Where is AuthService.login implemented?",
+    "expected": {
+      "files": ["src/auth/service.py"],
+      "symbols": ["AuthService.login"]
+    },
+    "expected_behavior": "Mark the active index stale when the working tree changes after indexing and identify freshness as a possible cause.",
+    "acceptable_limitations": ["Stale-index results are labeled as coming from the older indexed snapshot and must not be treated as current evidence."]
+  },
+  {
+    "id": "trust-deleted-file",
+    "query": "Where is the removed authentication helper?",
+    "expected": {
+      "files": ["src/auth/deleted.py"],
+      "symbols": ["removed_auth_helper"]
+    },
+    "expected_behavior": "Report the old indexed file as deleted from current source and flag the index as stale.",
+    "acceptable_limitations": ["Diagnosis can distinguish observed deletion from exclusion, but cannot infer why the file was removed."]
+  }
+]

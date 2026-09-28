@@ -14,18 +14,22 @@ This Master's thesis project builds and validates a working benchmark/retrieval 
 
 ## Current Phase
 
-**Phase 26.1 — Reproducible Research Prototype 0.1.1.**
+**Phase 28 — Separate local developer mode.** The immutable v0.1.1 release remains the research-prototype baseline; the current source tree adds a personal local workflow without changing research behavior.
 
 | Area | Status |
 |---|---|
 | Humanize pilot | COMPLETE / FROZEN |
-| Software | RELEASED RESEARCH PROTOTYPE |
-| Research | REPRODUCIBLE |
+| Software | RESEARCH PROTOTYPE + SEPARATE DEVELOPER MODE |
+| Research | REPRODUCIBLE / UNCHANGED |
 | Benchmark expansion | FUTURE WORK |
 
-The release packages the existing ingestion, Python parsing/chunking, indexing, retrieval, evaluation and validation utilities. The research workflow is reproducible; additional repositories, questions, annotation rounds, retrieval tuning/strategies, new experiments and scaling studies remain outside scope.
+The research workflow remains pinned, reproducible and governed separately. `prototype local` is for a developer's own local Python repository and writes rebuildable indexes, model cache, and personal run records only under a separate developer workspace. **This is a local developer workspace. Results are not benchmark results.** Local inputs do not become benchmark candidates, Humanize data is not read, and local runs are not research/evaluation records. The local parser currently supports Python `.py` files in existing Git working-tree roots; other file types are reported and ignored.
+
+Quick local flow: `prototype local scan PATH`, `prototype local index PATH`, then `prototype local query "question" --repository PATH`. Run `prototype local --help` for options or `prototype local demo` for a generated fixture. Dense indexing/query requires a local copy of the pinned model; model acquisition instructions and privacy/storage limits are in the [Phase 28 guide](docs/research/phase28-developer-mode.md).
 
 See the [release guide](docs/research/release-guide.md) for clean installation, commands, tests and reproduction. The [Phase 26 external-user validation report](docs/research/phase26-external-user-validation.md) records the earlier v0.1.0 blocker, and the [Phase 26.1 verification report](docs/research/phase26.1-release-verification.md) records the verified v0.1.1 public release. The [v0.1.1 release page](https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/tag/v0.1.1) hosts the exact-tag manifest asset. The [software prototype scope](docs/research/software-prototype-scope.md) documents component boundaries. Humanize remains frozen; benchmark expansion is deferred. This is not a production release.
+
+Use the [Phase 28 developer-mode guide](docs/research/phase28-developer-mode.md) for the personal workflow and storage/privacy boundary. Phase 28 changes are in this source tree and do not rewrite the published v0.1.1 tag.
 
 ## Get the Release
 
@@ -76,11 +80,14 @@ prototype validate
 prototype evaluate
 prototype demo
 prototype reproduce RUN_ID
+prototype local --help
 ```
 
 `prototype demo` parses and chunks a tiny generated Python fixture (three chunks), evaluates two synthetic queries, and prints MRR and nDCG. Its fixture is constructed to exercise the plumbing; perfect scores are not research results. `prototype evaluate --json` prints the per-query smoke report. Neither command accesses the network or Humanize artifacts. `prototype validate` checks only pinned local checkouts and never fetches them; without a corpus, `0/9` snapshots and `Preprocessing ready: no` are the expected result, not a successful corpus validation. Its defaults use `~/prototype-data/corpus` for input and `~/prototype-data/validation` for reports; override them with `--corpus-root` and `--output-dir`, or set `PROTOTYPE_DATA_ROOT` before starting the command. Reports and run records are written outside this project and the source checkouts.
 
 Configuration defaults and environment overrides are documented in [prototype configuration](docs/research/prototype-configuration.md). Use `prototype --config PATH validate` for a complete external YAML configuration.
+
+For local code exploration, use `prototype local scan PATH`, `prototype local index PATH`, and `prototype local query "question"`. These commands use the separate `~/.prototype/developer-workspace`; they do not write to `PROTOTYPE_DATA_ROOT`, benchmark/evaluation directories, or Humanize storage. Indexing requires the separately downloaded pinned model cache in that developer workspace. See the Phase 28 guide before indexing personal or sensitive code.
 
 Every command creates an external run record under `$env:PROTOTYPE_DATA_ROOT\runs` containing configuration, metadata, standardized results, and logs. After running the demo, find its run ID and reproduce that specific run with:
 

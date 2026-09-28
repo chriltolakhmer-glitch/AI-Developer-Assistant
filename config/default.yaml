@@ -1,5 +1,6 @@
 # Central defaults for the local research prototype.
 data_root: "~/prototype-data"
+developer_workspace: "~/.prototype/developer-workspace"
 corpus_root: "${data_root}/corpus"
 validation_output: "${data_root}/validation"
 embedding_model_cache: "${data_root}/model-cache"

@@ -12,6 +12,7 @@ class ConfigurationTests(unittest.TestCase):
         config = load_config(environ={})
 
         self.assertEqual(Path("~/prototype-data/corpus").expanduser(), config.corpus_root)
+        self.assertEqual(Path("~/.prototype/developer-workspace").expanduser(), config.developer_workspace)
         self.assertEqual("cpu", config.device)
         self.assertEqual(384, config.embedding_dimensions)
         self.assertEqual(256, config.max_tokens)
@@ -21,12 +22,14 @@ class ConfigurationTests(unittest.TestCase):
     def test_environment_overrides_yaml_values(self):
         config = load_config(environ={
             "PROTOTYPE_DATA_ROOT": "C:/external/prototype",
+            "PROTOTYPE_DEVELOPER_WORKSPACE": "C:/personal/prototype",
             "PROTOTYPE_CORPUS_ROOT": "C:/external/corpus",
             "PROTOTYPE_OFFLINE": "false",
             "PROTOTYPE_RETRIEVAL_K": "25",
         })
 
         self.assertEqual(Path("C:/external/prototype"), config.data_root)
+        self.assertEqual(Path("C:/personal/prototype"), config.developer_workspace)
         self.assertEqual(Path("C:/external/corpus"), config.corpus_root)
         self.assertEqual(Path("C:/external/prototype/validation"), config.validation_output)
         self.assertEqual(Path("C:/external/prototype/model-cache"), config.embedding_model_cache)
@@ -53,7 +56,15 @@ class ConfigurationTests(unittest.TestCase):
             config = load_config(path, environ={"PROTOTYPE_RETRIEVAL_K": "20"})
 
         self.assertEqual(Path("C:/custom"), config.data_root)
+        self.assertEqual(Path.home() / ".prototype" / "developer-workspace", config.developer_workspace)
         self.assertEqual(20, config.retrieval_k)
+
+    def test_developer_workspace_must_not_overlap_research_storage(self):
+        with self.assertRaisesRegex(ValueError, "developer_workspace must be separate from research storage"):
+            load_config(environ={
+                "PROTOTYPE_DATA_ROOT": "C:/external/prototype",
+                "PROTOTYPE_DEVELOPER_WORKSPACE": "C:/external/prototype/personal",
+            })
 
     def test_invalid_values_fail_with_actionable_messages(self):
         for key, value, message in (

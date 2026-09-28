@@ -1,0 +1,52 @@
+[
+  {
+    "id": "calibration-authentication",
+    "query": "How does authentication issue a token?",
+    "expected": {
+      "files": ["src/auth/service.py", "src/auth/token.py"],
+      "symbols": ["AuthService.login", "TokenManager.issue"],
+      "relationships": ["TokenManager", "load_auth_config"]
+    },
+    "failure_notes": "Detect missing callee or configuration context without treating a Python-only limitation as a retrieval failure."
+  },
+  {
+    "id": "calibration-api-endpoint",
+    "query": "Where is the login API endpoint handled?",
+    "expected": {
+      "files": ["src/api/routes.py"],
+      "symbols": ["login_route"],
+      "relationships": ["AuthService"]
+    },
+    "failure_notes": "Detect correct route file with a lower-ranked handler or excess unrelated route context."
+  },
+  {
+    "id": "calibration-configuration",
+    "query": "Where is the authentication issuer configured?",
+    "expected": {
+      "files": ["src/config.py"],
+      "symbols": ["AUTH_ISSUER", "load_auth_config"],
+      "relationships": []
+    },
+    "failure_notes": "Detect missing constant or configuration-loading symbol."
+  },
+  {
+    "id": "calibration-database-access",
+    "query": "Where does the application connect to the database?",
+    "expected": {
+      "files": ["src/database.py"],
+      "symbols": ["connect_database"],
+      "relationships": ["DatabaseClient"]
+    },
+    "failure_notes": "This intentionally exposes missing-fixture evidence for calibration of failure reporting."
+  },
+  {
+    "id": "calibration-utility-trace",
+    "query": "Where is the token formatting utility used?",
+    "expected": {
+      "files": ["src/auth/token.py"],
+      "symbols": ["TokenManager.issue"],
+      "relationships": ["AuthService"]
+    },
+    "failure_notes": "Detect caller/callee relationship gaps and duplicate symbol context."
+  }
+]

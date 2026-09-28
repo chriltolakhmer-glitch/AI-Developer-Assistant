@@ -17,6 +17,7 @@ _PACKAGED_DEFAULT_CONFIG_PATH = Path(__file__).with_name("default.yaml")
 _SHA1_PATTERN = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 _ENVIRONMENT_KEYS = {
     "PROTOTYPE_DATA_ROOT": "data_root",
+    "PROTOTYPE_DEVELOPER_WORKSPACE": "developer_workspace",
     "PROTOTYPE_CORPUS_ROOT": "corpus_root",
     "PROTOTYPE_VALIDATION_OUTPUT": "validation_output",
     "EMBEDDING_MODEL_CACHE": "embedding_model_cache",
@@ -36,6 +37,7 @@ class PrototypeConfig:
     """Runtime settings whose values are safe to expose in run metadata."""
 
     data_root: Path
+    developer_workspace: Path
     corpus_root: Path
     validation_output: Path
     embedding_model_cache: Path
@@ -106,7 +108,7 @@ def _expand_templates(values: dict[str, object]) -> None:
 
 def _validate(values: Mapping[str, object]) -> PrototypeConfig:
     required = {
-        "data_root", "corpus_root", "validation_output", "embedding_model_cache",
+        "data_root", "developer_workspace", "corpus_root", "validation_output", "embedding_model_cache",
         "offline", "device", "embedding_model_id", "embedding_model_revision",
         "embedding_dimensions", "max_tokens", "retrieval_k", "rrf_constant",
     }
@@ -128,8 +130,9 @@ def _validate(values: Mapping[str, object]) -> PrototypeConfig:
         raise ValueError("embedding_dimensions must remain 384 for the frozen embedding contract")
     if max_tokens != 256:
         raise ValueError("max_tokens must remain 256 for the frozen embedding contract")
-    return PrototypeConfig(
+    config = PrototypeConfig(
         data_root=_path(values["data_root"], "data_root"),
+        developer_workspace=_path(values["developer_workspace"], "developer_workspace"),
         corpus_root=_path(values["corpus_root"], "corpus_root"),
         validation_output=_path(values["validation_output"], "validation_output"),
         embedding_model_cache=_path(values["embedding_model_cache"], "embedding_model_cache"),
@@ -142,6 +145,23 @@ def _validate(values: Mapping[str, object]) -> PrototypeConfig:
         retrieval_k=_parse_positive_int(values["retrieval_k"], "retrieval_k"),
         rrf_constant=_parse_positive_int(values["rrf_constant"], "rrf_constant"),
     )
+    developer_root = config.developer_workspace.resolve()
+    for research_root in (
+        config.data_root,
+        config.corpus_root,
+        config.validation_output,
+        config.embedding_model_cache,
+    ):
+        resolved_research = research_root.resolve()
+        if (developer_root == resolved_research
+                or developer_root in resolved_research.parents
+                or resolved_research in developer_root.parents):
+            raise ValueError(
+                "developer_workspace must be separate from research storage; "
+                f"'{config.developer_workspace}' overlaps '{research_root}'. "
+                "Set PROTOTYPE_DEVELOPER_WORKSPACE to a separate directory."
+            )
+    return config
 
 
 def load_config(
@@ -167,6 +187,8 @@ def load_config(
             f"Configuration file '{config_path}' must contain a YAML mapping at its top level"
         )
     values = dict(raw)
+    # Preserve compatibility with pre-Phase-28 custom configuration files.
+    values.setdefault("developer_workspace", "~/.prototype/developer-workspace")
     environment = os.environ if environ is None else environ
     for environment_key, field in _ENVIRONMENT_KEYS.items():
         if environment_key in environment:

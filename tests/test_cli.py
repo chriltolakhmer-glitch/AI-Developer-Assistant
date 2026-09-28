@@ -52,6 +52,31 @@ class CliTests(unittest.TestCase):
         self.assertIn("Snapshots validated: 0/9", output)
         runner_type.return_value.run.assert_called_once()
 
+    def test_validate_with_existing_corpus_root_completes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
+            "os.environ", {"PROTOTYPE_DATA_ROOT": temporary_directory}, clear=False
+        ), patch("src.cli.PipelineValidationRunner") as runner_type:
+            runner_type.return_value.run.return_value = type(
+                "Report", (), {
+                    "validated_repository_count": 0,
+                    "expected_repository_count": 9,
+                    "preprocessing_ready": False,
+                }
+            )()
+            status, output, errors = self.run_cli(
+                "validate",
+                "--corpus-root",
+                temporary_directory,
+                "--output-dir",
+                str(Path(temporary_directory) / "reports"),
+            )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", errors)
+        self.assertIn("Snapshots validated: 0/9", output)
+        self.assertIn("Preprocessing ready: no", output)
+        runner_type.return_value.run.assert_called_once()
+
     def test_validate_reports_missing_corpus_without_fetching(self):
         with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
             "os.environ", {"PROTOTYPE_DATA_ROOT": temporary_directory}, clear=False
