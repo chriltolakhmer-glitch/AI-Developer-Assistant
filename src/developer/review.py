@@ -81,7 +81,7 @@ def _validation_summary(candidate):
     if not validation:
         return None
     return {key: deepcopy(validation.get(key)) for key in
-            ("id", "recorded_at", "status", "passed", "gates", "before", "after")}
+            ("id", "recorded_at", "status", "passed", "gates", "before", "after", "retrieval_settings", "base_configuration")}
 
 
 def _candidate_context(workspace, candidate):

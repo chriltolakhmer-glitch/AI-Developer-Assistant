@@ -466,3 +466,34 @@ source files. Records remain in the external developer workspace and are not res
 or benchmark results.
 
 See [Phase 44 review workflow, policy and limitations](phase44-developer-retrieval-governance-review.md).
+
+
+## Developer retrieval promotion (Phase 45)
+
+Create a configuration candidate with `local optimize create --retrieval-settings
+'{"relationship_factor": 1.5}'` plus the existing required candidate/evidence options.
+Supported values are finite numbers from 1 to 2; the default multiplier is 1.25.
+Validate the candidate using `local optimize validate`, record its validated lifecycle,
+and obtain approval using the Phase 44 review commands. Validation and approval bind
+the exact settings and prior active configuration. Prose-only proposals cannot be
+promoted and must be recreated with explicit settings and fresh evidence.
+
+```text
+prototype local optimize-promote CANDIDATE_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local optimize-promotion-status --workspace EXTERNAL_WORKSPACE --json
+prototype local optimize-promotion-check --workspace EXTERNAL_WORKSPACE --json
+prototype local optimize-retire PROMOTION_OR_CANDIDATE_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local optimize-promote-rollback PROMOTION_OR_CANDIDATE_ID --workspace EXTERNAL_WORKSPACE --json
+```
+
+Promotion explicitly moves pending ? validated ? promoted and activates settings
+only for the source developer repository. Status exposes active, pending and retired
+promotions, complete records and rollback history. Retirement removes settings while
+preserving history. Rollback restores the exact prior configuration; later changes
+must be rolled back first. All records live in the external developer workspace.
+The read-only check reports `passed`, `warnings` and `blocked` without repair or
+activation. Candidate decisions, reviews and source-change rollback records remain
+separate. No research/benchmark/Humanize/release artifacts are changed.
+
+See [Phase 45](phase45-developer-retrieval-promotion-pipeline.md) for lifecycle states,
+atomic storage, validation gates, pause/resume API and recovery limitations.

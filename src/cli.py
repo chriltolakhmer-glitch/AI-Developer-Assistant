@@ -257,6 +257,7 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--problem")
     optimize.add_argument("--case", action="append", default=[], help="Affected case ID; repeat as needed.")
     optimize.add_argument("--source", action="append", default=[], help="Evidence event ID from inspect-history; repeat as needed.")
+    optimize.add_argument("--retrieval-settings", type=json.loads, help='Developer settings JSON, e.g. {"relationship_factor": 1.5}.')
     optimize.add_argument("--proposed-change")
     optimize.add_argument("--validation-method")
     optimize.add_argument("--supersedes", help="Prior rejected candidate ID this experiment retries.")
@@ -359,6 +360,14 @@ def _build_parser() -> argparse.ArgumentParser:
             review_action.add_argument("--conflict-note", help="Document known conflicts for human review; does not resolve them.")
         review_action.add_argument("--workspace", type=_path_argument)
         review_action.add_argument("--json", action="store_true")
+
+    for command in ("optimize-promote", "optimize-promotion-status", "optimize-retire",
+                    "optimize-promote-rollback", "optimize-promotion-check"):
+        promotion = local_commands.add_parser(command, help="Manage developer retrieval promotions.")
+        if command in {"optimize-promote", "optimize-retire", "optimize-promote-rollback"}:
+            promotion.add_argument("id", help="Candidate or promotion ID.")
+        promotion.add_argument("--workspace", type=_path_argument)
+        promotion.add_argument("--json", action="store_true")
 
     optimize_policy = local_commands.add_parser(
         "optimize-policy-check", help="Run read-only developer optimization governance policy checks."
@@ -622,7 +631,8 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             payload = show_candidates(developer, options.id)
         elif options.action == "create":
             payload = create_candidate(developer, options.id, options.problem, options.case, options.source,
-                                       options.proposed_change, options.validation_method, options.supersedes)
+                                       options.proposed_change, options.validation_method, options.supersedes,
+                                       options.retrieval_settings)
         elif options.action == "validate":
             if not all((options.repository, options.cases, options.before)):
                 raise ValueError("Validation requires --repository, --cases and --before.")
@@ -711,6 +721,18 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
                                      options.conflict_note)
         else:
             payload = actions[options.local_command](developer, options.id, options.reviewer, options.reason)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command in {"optimize-promote", "optimize-promotion-status", "optimize-retire",
+                                 "optimize-promote-rollback", "optimize-promotion-check"}:
+        from src.developer.promotion import promote, promotion_status, retire, rollback, promotion_check
+        actions = {"optimize-promote": promote, "optimize-retire": retire,
+                   "optimize-promote-rollback": rollback}
+        if options.local_command in actions:
+            payload = actions[options.local_command](developer, options.id)
+        else:
+            payload = (promotion_check if options.local_command == "optimize-promotion-check"
+                       else promotion_status)(developer)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return payload
     if options.local_command == "optimize-policy-check":

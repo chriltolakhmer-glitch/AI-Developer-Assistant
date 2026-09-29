@@ -15,7 +15,7 @@ def _terms(text):
     return {_ALIASES.get(word, word) for word in re.findall(r"[a-z0-9]+", text.casefold()) if word not in _STOP}
 
 
-def rank_developer_results(question, dense, lexical, top_k, context=None):
+def rank_developer_results(question, dense, lexical, top_k, context=None, settings=None):
     """Rerank the local candidate union with explainable symbol/graph preferences.
 
     Prefer exact symbol names, query-matched static relationships, and relevant
@@ -52,7 +52,7 @@ def rank_developer_results(question, dense, lexical, top_k, context=None):
                 ))
             )
         })
-        relationship_factor = 1.25 if matching_relationships else 1.0
+        relationship_factor = (settings or {}).get("relationship_factor", 1.25) if matching_relationships else 1.0
         file_factor = 1 + 0.10 * min(len(path_terms), 3)
         parts = PurePosixPath(result.file_path).parts
         is_test = any(part in {"test", "tests", "testing"} or part.startswith("test_") or part.endswith("_test.py") for part in parts)

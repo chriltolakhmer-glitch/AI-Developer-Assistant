@@ -48,7 +48,9 @@ def _storage(workspace, identifier):
     return workspace._contained(workspace.root / "optimization" / "candidates" / _name(identifier))
 
 
-def create_candidate(workspace, identifier, problem, cases, source, proposed_change, validation_method, supersedes=None):
+def create_candidate(workspace, identifier, problem, cases, source, proposed_change, validation_method, supersedes=None, retrieval_settings=None):
+    from .promotion import validate_settings
+    retrieval_settings = validate_settings({} if retrieval_settings is None else retrieval_settings)
     directory = _storage(workspace, identifier)
     if any(not isinstance(value, str) or not value.strip()
            for value in (problem, proposed_change, validation_method)):
@@ -72,7 +74,7 @@ def create_candidate(workspace, identifier, problem, cases, source, proposed_cha
         "id": identifier, "problem": problem.strip(), "cases": sorted(set(cases)),
         "source": sorted(set(source)), "repository_id": repositories.pop(),
         "proposed_change": proposed_change.strip(), "validation_method": validation_method.strip(),
-        "supersedes": supersedes, "status": "candidate", "result": None})
+        "supersedes": supersedes, "retrieval_settings": retrieval_settings, "status": "candidate", "result": None})
 
 
 def show_candidates(workspace, identifier=None):
@@ -227,6 +229,20 @@ def compare_versions(workspace, before, after, repository_id=None):
 
 
 def validate_candidate(workspace, identifier, repository, cases_path, before, ranking_notes=None):
+    from .promotion import EXPERIMENT, active_configuration, validate_settings
+    candidate = show_candidates(workspace, identifier)["candidates"][0]
+    settings = validate_settings(candidate.get("retrieval_settings", {}))
+    base = active_configuration(workspace)
+    token = EXPERIMENT.set((candidate["repository_id"], settings))
+    try:
+        return _validate_candidate(workspace, identifier, repository, cases_path, before, ranking_notes,
+                                   settings, base)
+    finally:
+        EXPERIMENT.reset(token)
+
+
+def _validate_candidate(workspace, identifier, repository, cases_path, before, ranking_notes,
+                        settings, base):
     from .local_workflow import scan_local_repository
     candidate = show_candidates(workspace, identifier)["candidates"][0]
     if candidate["decision"]:
@@ -281,7 +297,8 @@ def validate_candidate(workspace, identifier, repository, cases_path, before, ra
     }
     validation_id = uuid4().hex
     return _write(workspace, _storage(workspace, identifier) / "validations" / f"{validation_id}.json", {
-        "id": validation_id, "candidate_id": identifier, "before": before, "after": report["history_id"],
+        "id": validation_id, "candidate_id": identifier, "retrieval_settings": settings,
+        "base_configuration": base, "before": before, "after": report["history_id"],
         "gates": gates, "passed": all(gates.values()), "ranking_notes": ranking_notes,
         "compatibility": compatibility, "comparison": comparison, "status": "validated"})
 

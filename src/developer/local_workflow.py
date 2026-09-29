@@ -187,7 +187,7 @@ class DeveloperIndex:
                 "Run prototype local index <repository> again."
             ) from error
 
-    def query(self, question: str, top_k: int, model_cache: Path):
+    def query(self, question: str, top_k: int, model_cache: Path, settings=None):
         if not isinstance(question, str) or not question.strip():
             raise LocalWorkflowError("Question must be nonempty text.")
         if type(top_k) is not int or not 1 <= top_k <= CANDIDATE_WINDOW:
@@ -210,7 +210,7 @@ class DeveloperIndex:
         dense_results = self.dense.search(query_vector, k=CANDIDATE_WINDOW)
         lexical_results = BM25Search(self.lexical).search(text, k=CANDIDATE_WINDOW)
         from .ranking import rank_developer_results
-        return rank_developer_results(text, dense_results, lexical_results, top_k, self.context)
+        return rank_developer_results(text, dense_results, lexical_results, top_k, self.context, settings)
 
 
 def _normalized_name(value: str) -> str:
@@ -601,7 +601,9 @@ class DeveloperWorkspace:
             raise LocalWorkflowError(
                 f"No index matches repository '{current.root}'. Run prototype local index \"{current.root}\" first."
             )
-        results = index.query(question, top_k, self.root / "model-cache")
+        from .promotion import retrieval_settings
+        settings = retrieval_settings(self, current.repository_id)
+        results = index.query(question, top_k, self.root / "model-cache", settings)
         result_rows = results
         for row in result_rows:
             row["explanation"] = _result_explanation(question, row)
@@ -853,7 +855,9 @@ class DeveloperWorkspace:
         )
         results = []
         if index is not None:
-            results = index.query(case["query"], top_k, self.root / "model-cache")
+            from .promotion import retrieval_settings
+            settings = retrieval_settings(self, index.manifest["repository_id"])
+            results = index.query(case["query"], top_k, self.root / "model-cache", settings)
             for row in results:
                 row["explanation"] = _result_explanation(case["query"], row)
 

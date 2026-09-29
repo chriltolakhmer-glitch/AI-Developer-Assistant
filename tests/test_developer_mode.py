@@ -861,7 +861,7 @@ class DeveloperModeTests(unittest.TestCase):
             else:
                 directory.unlink()
 
-    def _optimization_setup(self, identifier="session-fix"):
+    def _optimization_setup(self, identifier="session-fix", retrieval_settings=None):
         from src.developer.optimization import create_candidate
         cases = self.root / "optimization-cases.json"
         cases.write_text(json.dumps([{"id": "session", "query": "load_session_token",
@@ -871,7 +871,8 @@ class DeveloperModeTests(unittest.TestCase):
         with patch("src.developer.local_workflow.load_model", return_value=self._query_model()):
             baseline = self.developer.regression(self.repository, cases, create_baseline=True)
         candidate = create_candidate(self.developer, identifier, "Review repeated context", ["session"],
-            [baseline["history_id"] + ":session"], "Inspect expansion limits", "Run all baseline cases and compatibility gates")
+            [baseline["history_id"] + ":session"], "Inspect expansion limits", "Run all baseline cases and compatibility gates",
+            retrieval_settings=retrieval_settings)
         return cases, baseline, candidate
 
     def _register_passed_lifecycle_validation(self, candidate):
@@ -1478,6 +1479,205 @@ class DeveloperModeTests(unittest.TestCase):
         with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
             self.assertNotEqual(0, main(("local", "rollback", "record", "--workspace", str(self.workspace_path))))
         self.assertFalse(self.research_root.exists())
+
+    def _promotion_setup(self, identifier="promotable"):
+        from src.developer.optimization import validate_candidate
+        from src.developer.governance import register_candidate, transition_candidate
+        from src.developer.review import create_review, approve_review
+        cases, baseline, candidate = self._optimization_setup(
+            identifier, retrieval_settings={"relationship_factor": 1.5})
+        register_candidate(self.developer, candidate["id"], "developer", "validate settings", candidate["cases"])
+        transition_candidate(self.developer, candidate["id"], "experimenting", "try explicit settings")
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()):
+            validation = validate_candidate(self.developer, candidate["id"], self.repository, cases, "default",
+                                            {"session": "Review relationship factor change"})
+        self.assertTrue(validation["passed"], validation)
+        transition_candidate(self.developer, candidate["id"], "validated", "gates passed",
+                             last_validation_at=validation["recorded_at"])
+        review = create_review(self.developer, candidate["id"], "Review configuration",
+                               conflict_note="Case IDs can overlap across isolated repositories.")
+        approve_review(self.developer, review["review_id"], "developer", "Approved settings and evidence")
+        return candidate, cases
+
+    def test_promotion_creation_transitions_and_append_only_history(self):
+        from src.developer.promotion import create_promotion, transition_promotion, active_configuration
+        candidate, _ = self._promotion_setup()
+        record = create_promotion(self.developer, candidate["id"])
+        self.assertEqual("pending", record["status"])
+        self.assertEqual("developer", record["approved_by"])
+        directory = self.workspace_path / "optimization" / "promotions"
+        first = next(directory.glob("*.json"))
+        saved = first.read_bytes()
+        self.assertFalse(active_configuration(self.developer)["entries"])
+        with self.assertRaisesRegex(LocalWorkflowError, "Invalid promotion transition"):
+            transition_promotion(self.developer, record["promotion_id"], "promoted")
+        transition_promotion(self.developer, record["promotion_id"], "validated")
+        record = transition_promotion(self.developer, record["promotion_id"], "promoted")
+        self.assertEqual(["pending", "validated", "promoted"], [h["status"] for h in record["history"]])
+        self.assertEqual(saved, first.read_bytes())
+        self.assertEqual([candidate["id"]], active_configuration(self.developer)["active_candidates"])
+
+    def test_promotion_cli_runtime_retirement_and_review_governance_compatibility(self):
+        from src.developer.promotion import active_configuration, retrieval_settings
+        from src.developer.governance import optimize_audit
+        from src.developer.review import policy_check
+        from src.developer.ranking import rank_developer_results
+        with self.source_path.open("a", encoding="utf-8") as stream:
+            stream.write("\ndef wrapper(headers):\n    return load_session_token(headers)\n")
+        candidate, cases = self._promotion_setup()
+        original = self.source_path.read_bytes()
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(0, main(("local", "optimize-promote", candidate["id"],
+                                     "--workspace", str(self.workspace_path), "--json")))
+        record = json.loads(output.getvalue())
+        self.assertEqual("promoted", record["status"])
+        self.assertEqual({}, retrieval_settings(self.developer, "another-repository"))
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()), \
+                patch("src.developer.ranking.rank_developer_results", wraps=rank_developer_results) as ranking:
+            queried = self.developer.query("load_session_token", self.repository)
+            self.assertTrue(any(row["ranking_reason"]["relationship_factor"] == 1.5
+                                for row in queried["results"]))
+            self.developer.trace("load_session_token", self.repository)
+            self.developer.diagnose("session", cases, self.repository)
+        self.assertEqual(3, ranking.call_count)
+        self.assertTrue(all(c.args[-1] == {"relationship_factor": 1.5} for c in ranking.call_args_list))
+        self.assertEqual("clean", optimize_audit(self.developer)["audit_status"])
+        self.assertFalse(policy_check(self.developer)["blocked"])
+        for command in ("optimize-promotion-status", "optimize-promotion-check"):
+            with redirect_stdout(StringIO()) as output:
+                self.assertEqual(0, main(("local", command, "--workspace", str(self.workspace_path), "--json")))
+            payload = json.loads(output.getvalue())
+            if command.endswith("check"):
+                self.assertFalse(payload["blocked"], payload)
+            else:
+                self.assertEqual(1, len(payload["active_promotions"]))
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(0, main(("local", "optimize-retire", candidate["id"],
+                                     "--workspace", str(self.workspace_path), "--json")))
+        self.assertEqual("retired", json.loads(output.getvalue())["history"][-1]["status"])
+        self.assertFalse(active_configuration(self.developer)["entries"])
+        self.assertEqual(original, self.source_path.read_bytes())
+        self.assertFalse(self.research_root.exists())
+
+    def test_promotion_rollback_restores_exact_configuration(self):
+        from src.developer.promotion import promote, active_configuration, promotion_status, retire
+        candidate, _ = self._promotion_setup()
+        previous = active_configuration(self.developer)
+        record = promote(self.developer, candidate["id"])
+        with redirect_stdout(StringIO()) as output:
+            self.assertEqual(0, main(("local", "optimize-promote-rollback", record["promotion_id"],
+                                     "--workspace", str(self.workspace_path), "--json")))
+        self.assertEqual("rolled_back", json.loads(output.getvalue())["status"])
+        self.assertEqual(previous, active_configuration(self.developer))
+        self.assertEqual(1, len(promotion_status(self.developer)["rollback_history"]))
+        retire(self.developer, record["promotion_id"])
+        self.assertEqual(1, len(promotion_status(self.developer)["retired_promotions"]))
+
+    def test_promotion_rollback_order_preserves_other_repositories(self):
+        from src.developer.promotion import promote, rollback, active_configuration, transition_promotion
+        first, _ = self._promotion_setup()
+        initial = active_configuration(self.developer)
+        first_promotion = promote(self.developer, first["id"])
+        first_config = active_configuration(self.developer)
+        second_repository = self.root / "second-repository"
+        shutil.copytree(self.repository, second_repository)
+        self.repository = second_repository
+        second, _ = self._promotion_setup("second-promotion")
+        second_promotion = promote(self.developer, second["id"])
+        self.assertEqual(2, len(active_configuration(self.developer)["entries"]))
+        with self.assertRaisesRegex(LocalWorkflowError, "undo later changes"):
+            rollback(self.developer, first_promotion["promotion_id"])
+        with self.assertRaisesRegex(LocalWorkflowError, "undo later changes"):
+            transition_promotion(self.developer, first_promotion["promotion_id"], "paused")
+        rollback(self.developer, second_promotion["promotion_id"])
+        self.assertEqual(first_config, active_configuration(self.developer))
+        rollback(self.developer, first_promotion["promotion_id"])
+        self.assertEqual(initial, active_configuration(self.developer))
+
+    def test_promotion_atomic_publication_failure_preserves_active_state(self):
+        from src.developer.promotion import promote, active_configuration, promotion_status, transition_promotion
+        candidate, _ = self._promotion_setup()
+        with patch("src.developer.promotion.os.link", side_effect=OSError("publication failed")):
+            with self.assertRaisesRegex(LocalWorkflowError, "Cannot append"):
+                promote(self.developer, candidate["id"])
+        self.assertFalse(active_configuration(self.developer)["entries"])
+        self.assertFalse(promotion_status(self.developer)["promotions"])
+        self.assertFalse(list((self.workspace_path / "optimization" / "promotions").glob("*.tmp")))
+        record = promote(self.developer, candidate["id"])
+        prior = active_configuration(self.developer)
+        with patch("src.developer.promotion.os.link", side_effect=FileExistsError("competing writer")):
+            with self.assertRaises(LocalWorkflowError):
+                transition_promotion(self.developer, record["promotion_id"], "retired")
+        self.assertEqual(prior, active_configuration(self.developer))
+
+    def test_promotion_requires_approval_settings_and_valid_policy(self):
+        from src.developer.promotion import promote
+        from src.developer.review import create_review, approve_review
+        from src.developer.governance import transition_candidate
+        _, _, candidate = self._optimization_setup()
+        with self.assertRaises(LocalWorkflowError):
+            promote(self.developer, "missing")
+        with self.assertRaisesRegex(LocalWorkflowError, "approved"):
+            promote(self.developer, candidate["id"])
+        self._register_passed_lifecycle_validation(candidate)
+        review = create_review(self.developer, candidate["id"], "Review legacy proposal")
+        approve_review(self.developer, review["review_id"], "developer", "Approved")
+        with self.assertRaisesRegex(LocalWorkflowError, "explicit settings"):
+            promote(self.developer, candidate["id"])
+        transition_candidate(self.developer, candidate["id"], "rejected", "Reject experiment")
+        with self.assertRaisesRegex(LocalWorkflowError, "policy"):
+            promote(self.developer, candidate["id"])
+        self.assertFalse((self.workspace_path / "optimization" / "promotions").exists())
+
+    def test_promotion_rejects_stale_approval_and_missing_rollback(self):
+        from src.developer.promotion import promote
+        from src.developer.optimization import _storage
+        candidate, _ = self._promotion_setup()
+        validation_file = next((_storage(self.developer, candidate["id"]) / "validations").glob("*.json"))
+        original = validation_file.read_bytes()
+        document = json.loads(original)
+        document["retrieval_settings"] = {"relationship_factor": 1.7}
+        validation_file.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaisesRegex(LocalWorkflowError, "stale"):
+            promote(self.developer, candidate["id"])
+        validation_file.write_bytes(original)
+        baseline = next((self.workspace_path / "regression").glob("*/baselines/default.json"))
+        baseline.unlink()
+        with self.assertRaises(LocalWorkflowError):
+            promote(self.developer, candidate["id"])
+
+    def test_promotion_read_only_check_and_corruption_detection(self):
+        from src.developer.promotion import promote, promotion_check
+        report = promotion_check(self.developer)
+        self.assertFalse(report["blocked"])
+        self.assertFalse(self.workspace_path.exists())
+        candidate, _ = self._promotion_setup()
+        promote(self.developer, candidate["id"])
+        before = {str(p): p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        self.assertFalse(promotion_check(self.developer)["blocked"])
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        latest = sorted((self.workspace_path / "optimization" / "promotions").glob("*.json"))[-1]
+        document = json.loads(latest.read_text(encoding="utf-8"))
+        document["configuration"]["active_candidates"] = []
+        latest.write_text(json.dumps(document), encoding="utf-8")
+        self.assertTrue(promotion_check(self.developer)["blocked"])
+
+    def test_promotion_pause_resume_duplicate_and_invalid_settings(self):
+        from src.developer.promotion import promote, transition_promotion, active_configuration, validate_settings, rollback
+        for settings in ([], {"unknown": 1}, {"relationship_factor": True}, {"relationship_factor": float("nan")},
+                         {"relationship_factor": 3}):
+            with self.assertRaises(LocalWorkflowError):
+                validate_settings(settings)
+        candidate, _ = self._promotion_setup()
+        record = promote(self.developer, candidate["id"])
+        with self.assertRaises(LocalWorkflowError):
+            promote(self.developer, candidate["id"])
+        transition_promotion(self.developer, record["promotion_id"], "paused")
+        self.assertFalse(active_configuration(self.developer)["entries"])
+        transition_promotion(self.developer, record["promotion_id"], "promoted")
+        transition_promotion(self.developer, record["promotion_id"], "paused")
+        rollback(self.developer, record["promotion_id"])
+        self.assertFalse(active_configuration(self.developer)["entries"])
 
     def test_review_queue_history_transitions_and_cli_visibility(self):
         from src.developer.review import create_review, show_reviews, defer_review, reopen_review, withdraw_review
