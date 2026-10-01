@@ -1022,3 +1022,47 @@ after closure. Strategic readiness warnings do not constitute strategic approval
 
 See [Phase 58 governance operations](phase58-developer-retrieval-recovery-governance-operations.md)
 for lifecycles, time semantics, closure gates, handoffs, examples and limitations.
+
+## Phase 59: end-to-end operational readiness
+
+Readiness consolidates existing developer lifecycle checks without executing
+retrieval, activation, deployment, recovery or governance closure. Reports are
+read-only; mutations append only to `optimization/readiness` in an external
+workspace. The recorded manual status and computed current readiness are shown
+separately, with evidence freshness, blockers, warnings and manual decisions.
+
+```powershell
+prototype local readiness --workspace C:\DeveloperWorkspace --json
+prototype local readiness-audit --deployment-id deployment-001 --decision-id decision-001 --workspace C:\DeveloperWorkspace --json
+prototype local readiness-record-create deployment-001 --decision-id decision-001 --owner developer --reason "Consolidate lifecycle" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-transition retrieval-readiness-001 review_required --reason "Request review" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-review retrieval-readiness-001 --owner developer --note "Current evidence inspected" --reason "Manual review" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-transition retrieval-readiness-001 ready_for_manual_decision --reason "No blocking findings" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-transition retrieval-readiness-001 approved --confirm --reason "Manual approval" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-evidence retrieval-readiness-001 --reason "Capture existing record references" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-close retrieval-readiness-001 --owner developer --reason "Lifecycle reviewed" --confirm --workspace C:\DeveloperWorkspace --json
+prototype local readiness-history retrieval-readiness-001 --workspace C:\DeveloperWorkspace --json
+prototype local readiness-audit retrieval-readiness-001 --workspace C:\DeveloperWorkspace --json
+prototype local readiness-followup retrieval-readiness-001 --owner developer --component evidence --manual-action "Renew evidence manually" --due-at "2027-01-01T00:00:00+07:00" --reason "Plan next review" --workspace C:\DeveloperWorkspace --json
+prototype local readiness-followup-complete retrieval-readiness-001 retrieval-readiness-001-followup-001 --owner developer --note "Review completed manually" --reason "Complete follow-up" --workspace C:\DeveloperWorkspace --json
+```
+
+Create follow-ups before closure: closed readiness records are immutable. Closure
+with open non-blocking follow-ups requires `--outstanding-reason "Owner will follow
+up manually"`. This reason cannot waive blocking findings. Approval and closure
+recheck the full chain and reject changed evidence. Return to `review_required`,
+record a fresh owner review and evidence bundle, then make a new explicit decision.
+
+Readiness states are `not_ready`, `review_required`, `ready_for_manual_decision`,
+`approved` and `closed`. Closure requires approved state, current owner review,
+current evidence bundle, validated recovery/assurance, reviewed governance,
+completed or explicitly documented actions, documented exceptions and manual
+confirmation. Audit outputs `passed`, `warnings`, `blocked`, `missing` and
+`inconsistent`, plus traceable evidence references. Multiple governance decisions
+require explicit selection. No numerical readiness/quality score is generated.
+
+`readiness-evidence` can omit its ID and reason to append a bundle to the latest
+existing readiness record. Create a record first when no readiness history exists.
+
+See [Phase 59 operational readiness](phase59-developer-retrieval-operational-readiness.md)
+for linkage verification, warning/blocking rules, freshness, isolation and limits.

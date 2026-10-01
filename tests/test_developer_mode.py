@@ -4817,5 +4817,226 @@ class DeveloperModeTests(unittest.TestCase):
             o.actions(DeveloperWorkspace(self.research_root / "governance-operations", research_roots=[self.research_root]))
 
 
+    def _operational_readiness_setup(self):
+        from src.developer import (readiness as r, maturity as m, evolution as e,
+                                   strategic_governance as g, governance_operations as o,
+                                   assurance, assurance_operations, continuity, operations,
+                                   configuration, deployment, reliability, recovery_governance)
+        _, config, deployed = self._deployment_setup()
+        configuration.transition_configuration(self.developer, config["config_id"], "activate", "Manual activation fixture")
+        deployment.transition_deployment(self.developer, deployed["deployment_id"], "validate", "Validate fixture")
+        deployment.transition_deployment(self.developer, deployed["deployment_id"], "activate", "Manual activation fixture")
+        operation = operations.create_operation(self.developer, deployed["deployment_id"], "health_check", "Manual health review")
+        operations.transition_operation(self.developer, operation["operation_id"], "resolved", "Reviewed manually")
+        plan = reliability.create_recovery_plan(self.developer, deployed["deployment_id"], "Recovery fixture")
+        reliability.verify_recovery(self.developer, plan["plan_id"])
+        scenario = continuity.create_scenario(self.developer, deployed["deployment_id"], "Continuity fixture")
+        continuity.test_scenario(self.developer, scenario["scenario_id"])
+        source = assurance.create_assurance(self.developer, scenario["scenario_id"], "Assurance fixture")
+        source = assurance.verify_assurance(self.developer, source["assurance_id"])
+        recovery_governance.register(self.developer, source["assurance_id"], "Register owner")
+        recovery_governance.change(self.developer, source["assurance_id"], "transition", "Manual governance activation", status="active")
+        recovery_governance.record_check(self.developer, source["assurance_id"], source["assurance_id"], "Record verification")
+        operated = assurance_operations.create(self.developer, source["assurance_id"], "Review cycle")
+        assurance_operations.record_review(self.developer, operated["operation_id"], "Review current evidence")
+        mature = m.create(self.developer, "readiness-fixture", [source["assurance_id"]], "maintainer", "Create maturity")
+        evolved = e.create(self.developer, "recovery-verification", "improvement", "maintainer", "Create evolution")
+        strategic = g.create(self.developer, "Maintain recovery readiness", "strategy-owner", [m.CAPABILITIES[0]],
+                             [evolved["evolution_id"]], [], [], [], "Define strategy")
+        strategic = g.add_roadmap(self.developer, strategic["governance_id"], "Schedule evidence review manually",
+                                  "roadmap-owner", "Next review period", [], "Document roadmap")
+        decision = o.create(self.developer, strategic["governance_id"], "Confirm end-to-end readiness", "decision-owner", "Propose decision")
+        mid, eid, gid, did = mature["maturity_id"], evolved["evolution_id"], strategic["governance_id"], decision["decision_id"]
+        plan = m.add_plan(self.developer, mid, ["Maintain evidence review"], [m.CAPABILITIES[0]], [], "Manual plan")
+        pid = plan["plans"][-1]["plan_id"]
+        m.review_plan(self.developer, mid, pid, "reviewed", "Plan reviewed", "Review")
+        for capability in m.CAPABILITIES:
+            m.assess(self.developer, mid, capability, "Assess current evidence")
+        e.record_impact(self.developer, eid, [m.CAPABILITIES[0]], [mid], [], [], [], "Refresh current impact")
+        g.record_review(self.developer, gid, "Review complete lifecycle evidence", "Review")
+        self._governance_ops_decide(did)
+        scenario = continuity._resolve(continuity._load(self.developer), source["scenario_id"])
+        depid = scenario["deployment_id"]
+        record = r.create(self.developer, depid, did, "readiness-owner", "Consolidate lifecycle")
+        return record, source, strategic
+
+    def test_operational_readiness_complete_chain_closure_and_history(self):
+        from src.developer import readiness as r
+        record, _, _ = self._operational_readiness_setup()
+        identifier = record["readiness_id"]
+        report = r.audit(self.developer, record["deployment_id"], record["decision_id"])
+        self.assertEqual([], report["blocked"], report["blocked"])
+        components = {i["component"] for i in report["evidence"]}
+        self.assertTrue({"candidate", "review", "promotion", "configuration", "deployment", "operations",
+                         "recovery", "continuity", "assurance", "maturity", "evolution", "governance", "decisions", "validation"} <= components)
+        original = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        r.transition(self.developer, identifier, "review_required", "Request review")
+        r.review(self.developer, identifier, "readiness-owner", "Review current chain", "Review")
+        r.transition(self.developer, identifier, "ready_for_manual_decision", "Ready")
+        with self.assertRaises(LocalWorkflowError):
+            r.transition(self.developer, identifier, "approved", "Approve")
+        r.transition(self.developer, identifier, "approved", "Approve", confirmed=True)
+        with self.assertRaises(LocalWorkflowError):
+            r.close(self.developer, identifier, "readiness-owner", "Close", confirmed=True)
+        bundled = r.evidence(self.developer, identifier, "Capture references")
+        self.assertTrue(bundled["evidence_bundles"][-1]["references"])
+        with self.assertRaises(LocalWorkflowError):
+            r.close(self.developer, identifier, "other-owner", "Close", confirmed=True)
+        closed = r.close(self.developer, identifier, "readiness-owner", "Lifecycle reviewed", confirmed=True)
+        self.assertEqual("closed", closed["status"])
+        self.assertEqual("readiness-owner", closed["closure"]["owner"])
+        for target in r.STATES:
+            with self.assertRaises(LocalWorkflowError):
+                r.transition(self.developer, identifier, target, "Reopen")
+        with self.assertRaises(LocalWorkflowError):
+            r.followup(self.developer, identifier, "owner", "recovery", "Review", "2027-01-01T00:00:00+00:00", "Plan")
+        for path, data in original.items():
+            self.assertEqual(data, path.read_bytes())
+        self.assertEqual(closed, r.history(self.developer, identifier)["record"])
+        self.assertFalse(r.status(self.developer, identifier)["recorded_evidence_stale"])
+
+    def test_operational_readiness_incomplete_chain_invalid_transitions_and_followup(self):
+        from src.developer import readiness as r, continuity
+        source, _, _, _, decision = self._governance_ops_setup()
+        scenario = continuity._resolve(continuity._load(self.developer), source["scenario_id"])
+        record = r.create(self.developer, scenario["deployment_id"], decision["decision_id"], "owner", "Record gaps")
+        identifier = record["readiness_id"]
+        self.assertEqual("not_ready", record["status"])
+        self.assertTrue(record["latest_evidence"]["blocked"])
+        for target in ("approved", "closed", "ready_for_manual_decision", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                r.transition(self.developer, identifier, target, "Invalid")
+        r.transition(self.developer, identifier, "review_required", "Inspect gaps")
+        with self.assertRaises(LocalWorkflowError):
+            r.review(self.developer, identifier, "other", "Review", "Wrong owner")
+        r.review(self.developer, identifier, "owner", "Gaps reviewed", "Review")
+        with self.assertRaises(LocalWorkflowError):
+            r.transition(self.developer, identifier, "ready_for_manual_decision", "Blocked")
+        for component, due_at in (("invalid", "2027-01-01T00:00:00+00:00"), ("validation", "2020-01-01T00:00:00+00:00"), ("validation", "2027-01-01")):
+            with self.assertRaises(LocalWorkflowError):
+                r.followup(self.developer, identifier, "owner", component, "Refresh evidence", due_at, "Gap")
+        updated = r.followup(self.developer, identifier, "owner", "validation", "Run validation manually", "2027-01-01T00:00:00+00:00", "Missing evidence")
+        item = updated["followups"][-1]
+        self.assertEqual("open", item["status"])
+        with self.assertRaises(LocalWorkflowError):
+            r.complete_followup(self.developer, identifier, item["followup_id"], "other", "Done", "Complete")
+        complete = r.complete_followup(self.developer, identifier, item["followup_id"], "owner", "Validation inspected manually", "Complete")
+        self.assertEqual("completed", complete["followups"][-1]["status"])
+        self.assertTrue(r.status(self.developer, identifier)["blocking"])
+
+    def test_operational_readiness_drift_expiry_and_compatibility(self):
+        from datetime import timedelta
+        from src.developer import (readiness as r, governance_operations as o, strategic_governance as g,
+                                   assurance, configuration, deployment, continuity, reliability)
+        record, source, strategic = self._operational_readiness_setup()
+        identifier, did = record["readiness_id"], record["decision_id"]
+        r.transition(self.developer, identifier, "review_required", "Review")
+        r.review(self.developer, identifier, "readiness-owner", "Review evidence", "Review")
+        r.transition(self.developer, identifier, "ready_for_manual_decision", "Ready")
+        action = o.add_action(self.developer, did, "Renew ownership review", "owner", "2027-01-01", "Manual action")
+        report = r.audit(self.developer, record["deployment_id"], did)
+        self.assertTrue(report["blocked"])
+        self.assertEqual(1, len(report["open_actions"]))
+        with self.assertRaises(LocalWorkflowError):
+            r.transition(self.developer, identifier, "approved", "Stale", confirmed=True)
+        o.transition_action(self.developer, did, action["actions"][-1]["action_id"], "cancelled", "Replaced", [], "Manual cancellation", "Cancel")
+        o.add_exception(self.developer, did, "Temporary issue", "owner", (o._now() + timedelta(hours=1)).isoformat(), "Document exception")
+        with patch.object(o, "_now", return_value=o._now() + timedelta(hours=2)):
+            report = r.audit(self.developer, record["deployment_id"], did)
+            self.assertTrue(any(i["expired"] for i in report["open_exceptions"]))
+            self.assertTrue(report["blocked"])
+        with patch.object(assurance, "_now", return_value=assurance._now() + timedelta(days=2)):
+            report = r.audit(self.developer, record["deployment_id"], did)
+            self.assertTrue(report["stale_evidence"])
+        for module, function in ((configuration, "_check"), (deployment, "deployment_governance_check"),
+                                 (reliability, "_verify"), (assurance, "recovery_assurance"), (g, "review")):
+            with patch.object(module, function, side_effect=LocalWorkflowError("Current evidence unavailable")):
+                self.assertTrue(r.audit(self.developer, record["deployment_id"], did)["blocked"])
+        self.assertTrue(r.status(self.developer, identifier)["recorded_evidence_stale"])
+
+    def test_operational_readiness_missing_orphaned_links_and_read_only_isolation(self):
+        from src.developer import readiness as r, configuration, governance_operations as o
+        absent = DeveloperWorkspace(self.root / "absent", (self.research_root,))
+        self.assertTrue(r.audit(absent)["missing"])
+        self.assertFalse(absent.root.exists())
+        self.assertEqual("not_ready", r.status(absent)["status"])
+        self.assertFalse(absent.root.exists())
+        for workspace in (DeveloperWorkspace(self.research_root / "ready", (self.research_root,)),
+                          DeveloperWorkspace(Path(local_workflow.__file__).resolve().parents[2] / "readiness")):
+            with self.assertRaises(LocalWorkflowError):
+                r.audit(workspace)
+        record, _, _ = self._operational_readiness_setup()
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        r.status(self.developer, record["readiness_id"])
+        r.audit(self.developer, record["deployment_id"], record["decision_id"])
+        r.history(self.developer, record["readiness_id"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        state = configuration._load(self.developer)
+        state["configurations"][0]["source_promotion"] = "missing-promotion"
+        with patch.object(configuration, "_load", return_value=state):
+            report = r.audit(self.developer, record["deployment_id"], record["decision_id"])
+            self.assertTrue(any(i["check"] == "orphaned_record" for i in report["missing"]))
+        with patch.object(o, "_load", side_effect=LocalWorkflowError("Broken decision history")):
+            self.assertTrue(r.audit(self.developer)["blocked"])
+
+    def test_operational_readiness_cli_and_manual_outstanding_items(self):
+        from src.developer import readiness as r
+        record, _, _ = self._operational_readiness_setup()
+        identifier = record["readiness_id"]
+        def run(*args, expected=0):
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(StringIO()):
+                self.assertEqual(expected, main(["local", *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue()) if expected == 0 else None
+        created = run("readiness-record-create", record["deployment_id"], "--decision-id", record["decision_id"],
+                      "--owner", "readiness-owner", "--reason", "Second manual closure cycle")
+        self.assertEqual("not_ready", created["status"])
+        run("readiness")
+        report = run("readiness-audit", identifier)
+        self.assertEqual([], report["blocked"])
+        self.assertEqual("passed", report["lifecycle"]["recovery"][0]["status"])
+        # The real audit above verifies the CLI integration. Reuse that immutable
+        # source view while testing argument dispatch and manual decision gates;
+        # separate integration tests exercise live source drift and closure checks.
+        self.enterContext(patch.object(r, "audit", return_value={k: v for k, v in report.items() if k != "notice"}))
+        run("readiness-transition", identifier, "review_required", "--reason", "Review")
+        run("readiness-review", identifier, "--owner", "readiness-owner", "--note", "Reviewed", "--reason", "Review")
+        run("readiness-transition", identifier, "ready_for_manual_decision", "--reason", "Ready")
+        run("readiness-transition", identifier, "approved", "--confirm", "--reason", "Approve")
+        follow = run("readiness-followup", identifier, "--owner", "owner", "--component", "assurance", "--manual-action", "Schedule next review manually", "--due-at", "2027-01-01T00:00:00+00:00", "--reason", "Future maintenance")
+        self.assertEqual("open", follow["followups"][-1]["status"])
+        run("readiness-evidence", identifier, "--reason", "Bundle")
+        run("readiness-close", identifier, "--owner", "readiness-owner", "--reason", "Close", expected=2)
+        run("readiness-close", identifier, "--owner", "readiness-owner", "--reason", "Close", "--confirm", expected=2)
+        closed = run("readiness-close", identifier, "--owner", "readiness-owner", "--reason", "Close", "--confirm", "--outstanding-reason", "Owner will schedule the next review manually")
+        self.assertEqual("closed", closed["status"])
+        self.assertTrue(closed["closure"]["outstanding_items"])
+        run("readiness-history", identifier)
+
+    def test_operational_readiness_atomic_append_corruption_and_history_preservation(self):
+        from src.developer import readiness as r
+        # A real empty audit exercises journal replay without synthesizing source evidence.
+        report = r.audit(self.developer, "deployment-001", "decision-001")
+        state = r._load(self.developer)
+        record = r._append(self.developer, state, "create", "retrieval-readiness-001", "Record missing chain", "developer", report,
+                           deployment_id="deployment-001", decision_id="decision-001", owner="owner")
+        identifier = record["readiness_id"]
+        with patch("src.developer.readiness.os.link", side_effect=OSError("Append failed")):
+            with self.assertRaises(LocalWorkflowError):
+                r.transition(self.developer, identifier, "review_required", "Review")
+        self.assertEqual(record, r.history(self.developer, identifier)["record"])
+        self.assertFalse(list(r._root(self.developer).glob("*.tmp")))
+        path = next(r._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        for field, value in (("previous_digest", "broken"), ("owner", ""), ("sequence", 9)):
+            event = json.loads(original)
+            event[field] = value
+            path.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaises(LocalWorkflowError):
+                r.history(self.developer, identifier)
+        path.write_bytes(original)
+        self.assertEqual(record, r.history(self.developer, identifier)["record"])
+
+
 if __name__ == "__main__":
     unittest.main()

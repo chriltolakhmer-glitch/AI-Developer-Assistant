@@ -361,6 +361,45 @@ def _build_parser() -> argparse.ArgumentParser:
         review_action.add_argument("--workspace", type=_path_argument)
         review_action.add_argument("--json", action="store_true")
 
+    for command in ("readiness", "readiness-audit", "readiness-record-create", "readiness-history", "readiness-evidence",
+                    "readiness-review", "readiness-transition", "readiness-close", "readiness-followup", "readiness-followup-complete"):
+        readiness = local_commands.add_parser(command, help="Developer end-to-end readiness and explicit manual closure.")
+        reports = {"readiness", "readiness-audit", "readiness-history"}
+        if command in {"readiness", "readiness-audit"}:
+            readiness.add_argument("id", nargs="?", help="Operational readiness ID.")
+            readiness.add_argument("--deployment-id")
+            readiness.add_argument("--decision-id")
+        elif command == "readiness-evidence":
+            readiness.add_argument("id", nargs="?", help="Operational readiness ID; defaults to the latest record.")
+        else:
+            readiness.add_argument("id", help="Deployment ID for create; operational readiness ID otherwise.")
+        if command not in reports:
+            if command == "readiness-evidence":
+                readiness.add_argument("--reason", default="Capture end-to-end readiness evidence references")
+            else:
+                readiness.add_argument("--reason", required=True)
+            readiness.add_argument("--actor", default="developer")
+        if command in {"readiness-record-create", "readiness-review", "readiness-close", "readiness-followup", "readiness-followup-complete"}:
+            readiness.add_argument("--owner", required=True)
+        if command == "readiness-record-create":
+            readiness.add_argument("--decision-id", required=True)
+        if command == "readiness-transition":
+            readiness.add_argument("state", choices=("not_ready", "review_required", "ready_for_manual_decision", "approved"))
+        if command in {"readiness-transition", "readiness-close"}:
+            readiness.add_argument("--confirm", action="store_true", help="Explicit human confirmation of approval/closure.")
+        if command == "readiness-close":
+            readiness.add_argument("--outstanding-reason")
+        if command in {"readiness-review", "readiness-followup-complete"}:
+            readiness.add_argument("--note", required=True)
+        if command == "readiness-followup":
+            readiness.add_argument("--component", required=True, choices=("promotion", "configuration", "deployment", "operations", "recovery", "assurance", "maturity", "evolution", "governance", "validation", "evidence"))
+            readiness.add_argument("--manual-action", required=True)
+            readiness.add_argument("--due-at", required=True, help="ISO timestamp with timezone.")
+        if command == "readiness-followup-complete":
+            readiness.add_argument("followup_id")
+        readiness.add_argument("--workspace", type=_path_argument)
+        readiness.add_argument("--json", action="store_true")
+
     for command in ("governance-decisions", "governance-actions", "governance-exceptions", "governance-decision", "governance-followup", "governance-close-check",
                     "governance-decision-create", "governance-decision-review", "governance-decision-transition", "governance-decision-assign",
                     "governance-action-add", "governance-action-transition", "governance-action-defer", "governance-action-assign",
@@ -1005,6 +1044,40 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
                                      options.conflict_note)
         else:
             payload = actions[options.local_command](developer, options.id, options.reviewer, options.reason)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command in {"readiness", "readiness-audit", "readiness-record-create", "readiness-history", "readiness-evidence",
+                                 "readiness-review", "readiness-transition", "readiness-close", "readiness-followup", "readiness-followup-complete"}:
+        from src.developer import readiness
+        command = options.local_command
+        if command == "readiness":
+            if options.id and (options.deployment_id or options.decision_id):
+                raise LocalWorkflowError("Use a readiness ID or explicit lifecycle selectors, not both")
+            payload = readiness.status(developer, options.id, options.deployment_id, options.decision_id)
+        elif command == "readiness-audit":
+            if options.id:
+                if options.deployment_id or options.decision_id:
+                    raise LocalWorkflowError("Use a readiness ID or explicit lifecycle selectors, not both")
+                record = readiness.history(developer, options.id)["record"]
+                payload = readiness.audit(developer, record["deployment_id"], record["decision_id"])
+            else:
+                payload = readiness.audit(developer, options.deployment_id, options.decision_id)
+        elif command == "readiness-record-create":
+            payload = readiness.create(developer, options.id, options.decision_id, options.owner, options.reason, options.actor)
+        elif command == "readiness-history":
+            payload = readiness.history(developer, options.id)
+        elif command == "readiness-evidence":
+            payload = readiness.evidence(developer, options.id, options.reason, options.actor)
+        elif command == "readiness-review":
+            payload = readiness.review(developer, options.id, options.owner, options.note, options.reason, options.actor)
+        elif command == "readiness-transition":
+            payload = readiness.transition(developer, options.id, options.state, options.reason, options.confirm, options.actor)
+        elif command == "readiness-close":
+            payload = readiness.close(developer, options.id, options.owner, options.reason, options.confirm, options.outstanding_reason, options.actor)
+        elif command == "readiness-followup":
+            payload = readiness.followup(developer, options.id, options.owner, options.component, options.manual_action, options.due_at, options.reason, options.actor)
+        else:
+            payload = readiness.complete_followup(developer, options.id, options.followup_id, options.owner, options.note, options.reason, options.actor)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return payload
     if options.local_command.startswith(("governance-decision", "governance-action", "governance-exception")) or options.local_command in {"governance-followup", "governance-close-check"}:
