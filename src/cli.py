@@ -361,6 +361,290 @@ def _build_parser() -> argparse.ArgumentParser:
         review_action.add_argument("--workspace", type=_path_argument)
         review_action.add_argument("--json", action="store_true")
 
+    for command in ("governance-decisions", "governance-actions", "governance-exceptions", "governance-decision", "governance-followup", "governance-close-check",
+                    "governance-decision-create", "governance-decision-review", "governance-decision-transition", "governance-decision-assign",
+                    "governance-action-add", "governance-action-transition", "governance-action-defer", "governance-action-assign",
+                    "governance-exception-add", "governance-exception-transition", "governance-exception-assign"):
+        operation = local_commands.add_parser(command, help="Developer-only governance decisions and operational follow-up.")
+        reports = {"governance-decisions", "governance-actions", "governance-exceptions", "governance-decision", "governance-followup", "governance-close-check"}
+        if command not in reports or command == "governance-decision":
+            operation.add_argument("id", help="Governance ID for creation; otherwise decision ID.")
+        if command not in reports:
+            operation.add_argument("--reason", required=True)
+            operation.add_argument("--actor", default="developer")
+        if command in {"governance-decision-create", "governance-decision-assign", "governance-action-add", "governance-action-assign", "governance-exception-add", "governance-exception-assign"}:
+            operation.add_argument("--owner", required=True)
+        if command == "governance-decision-create":
+            operation.add_argument("--decision", required=True)
+        if command in {"governance-action-add", "governance-exception-add"}:
+            operation.add_argument("--description", required=True)
+        if command in {"governance-action-add", "governance-action-assign"}:
+            operation.add_argument("--due-date", required=True)
+        if command in {"governance-action-transition", "governance-action-defer", "governance-action-assign"}:
+            operation.add_argument("action_id")
+        if command == "governance-action-defer":
+            operation.add_argument("--until", required=True)
+        if command in {"governance-exception-transition", "governance-exception-assign"}:
+            operation.add_argument("exception_id")
+        if command == "governance-exception-add":
+            operation.add_argument("--expires-at", required=True)
+            operation.add_argument("--action-id")
+        if command == "governance-decision-transition":
+            operation.add_argument("state", choices=("open", "reviewing", "decided", "deferred", "closed"))
+        if command == "governance-action-transition":
+            operation.add_argument("state", choices=("open", "in_progress", "blocked", "completed", "cancelled"))
+        if command == "governance-exception-transition":
+            operation.add_argument("state", choices=("open", "accepted", "mitigated", "expired", "closed"))
+        if command in {"governance-decision-review", "governance-decision-transition", "governance-action-transition", "governance-action-defer", "governance-exception-transition"}:
+            operation.add_argument("--note", required=True)
+        if command in {"governance-decision-review", "governance-action-transition", "governance-exception-transition"}:
+            operation.add_argument("--evidence", action="append", default=[])
+            operation.add_argument("--closure-reason")
+        operation.add_argument("--workspace", type=_path_argument)
+        operation.add_argument("--json", action="store_true")
+
+    for command in ("governance-status", "governance-history", "governance-review", "governance-dependencies", "governance-plan-review",
+                    "governance-create", "governance-update", "governance-transition", "governance-record-review",
+                    "governance-roadmap-add", "governance-roadmap-update", "governance-roadmap-transition", "governance-dependency-review"):
+        strategic = local_commands.add_parser(command, help="Developer-only recovery strategic governance.")
+        reports = {"governance-status", "governance-history", "governance-review", "governance-dependencies", "governance-plan-review"}
+        if command not in {"governance-status", "governance-dependencies", "governance-plan-review"}:
+            strategic.add_argument("id", help="Objective description for create; otherwise governance ID.")
+        if command not in reports:
+            strategic.add_argument("--reason", required=True)
+            strategic.add_argument("--actor", default="developer")
+        if command in {"governance-create", "governance-update"}:
+            if command == "governance-update":
+                strategic.add_argument("--objective", required=True)
+            strategic.add_argument("--owner", required=True)
+            strategic.add_argument("--capability", action="append", required=True)
+            strategic.add_argument("--evolution-id", action="append", default=[])
+            strategic.add_argument("--dependency", action="append", default=[])
+            strategic.add_argument("--note", action="append", default=[])
+            strategic.add_argument("--risk", action="append", default=[])
+        if command in {"governance-roadmap-add", "governance-roadmap-update"}:
+            strategic.add_argument("--description", required=True)
+            strategic.add_argument("--owner", required=True)
+            strategic.add_argument("--target-period", required=True)
+            strategic.add_argument("--dependency", action="append", default=[])
+        if command in {"governance-roadmap-update", "governance-roadmap-transition"}:
+            strategic.add_argument("--roadmap-id", required=True)
+        if command == "governance-transition":
+            strategic.add_argument("state", choices=("planned", "reviewing", "approved", "active", "completed", "retired"))
+        if command == "governance-roadmap-transition":
+            strategic.add_argument("state", choices=("proposed", "scheduled", "active", "completed", "deferred"))
+        if command == "governance-dependency-review":
+            strategic.add_argument("dependency")
+            strategic.add_argument("resolution", choices=("resolved", "unresolved"))
+            strategic.add_argument("--roadmap-id")
+        if command in {"governance-transition", "governance-record-review", "governance-roadmap-transition", "governance-dependency-review"}:
+            strategic.add_argument("--note", required=True)
+        strategic.add_argument("--workspace", type=_path_argument)
+        strategic.add_argument("--json", action="store_true")
+
+    for command in ("evolution-status", "evolution-history", "evolution-impact", "evolution-review", "evolution-plan",
+                    "evolution-create", "evolution-transition", "evolution-impact-add", "evolution-plan-add"):
+        evolution = local_commands.add_parser(command, help="Developer-only manual recovery evolution management.")
+        if command not in {"evolution-status", "evolution-plan"}:
+            evolution.add_argument("id", help="Capability label for create; otherwise evolution ID.")
+        if command in {"evolution-create", "evolution-transition", "evolution-impact-add", "evolution-plan-add"}:
+            evolution.add_argument("--reason", required=True)
+            evolution.add_argument("--actor", default="developer")
+        if command in {"evolution-create", "evolution-plan-add"}:
+            evolution.add_argument("--owner", required=True)
+        if command == "evolution-create":
+            evolution.add_argument("--change-type", default="improvement")
+        if command == "evolution-transition":
+            evolution.add_argument("state", choices=("planned", "reviewing", "approved", "implemented", "verified", "retired"))
+            evolution.add_argument("--note", required=True)
+        if command == "evolution-impact-add":
+            evolution.add_argument("--capability", action="append", required=True)
+            evolution.add_argument("--maturity-id", action="append", required=True)
+            evolution.add_argument("--finding", action="append", default=[])
+            evolution.add_argument("--note", action="append", default=[])
+            evolution.add_argument("--risk", action="append", default=[])
+        if command == "evolution-plan-add":
+            evolution.add_argument("--improvement", action="append", required=True)
+            evolution.add_argument("--dependency", action="append", default=[])
+            evolution.add_argument("--milestone", action="append", required=True)
+            evolution.add_argument("--supersedes")
+        evolution.add_argument("--workspace", type=_path_argument)
+        evolution.add_argument("--json", action="store_true")
+
+    for command in ("maturity-status", "maturity-history", "maturity-review", "maturity-readiness", "maturity-plan",
+                    "maturity-create", "maturity-assess", "maturity-assign", "maturity-transition", "maturity-plan-add", "maturity-plan-review"):
+        maturity = local_commands.add_parser(command, help="Developer recovery capability maturity and manual planning.")
+        if command not in {"maturity-status", "maturity-readiness", "maturity-plan"}:
+            maturity.add_argument("id", help="Area for create/review; otherwise maturity ID.")
+        if command in {"maturity-create", "maturity-assess", "maturity-assign", "maturity-transition", "maturity-plan-add", "maturity-plan-review"}:
+            maturity.add_argument("--reason", required=True)
+            maturity.add_argument("--actor", default="developer")
+        if command in {"maturity-create", "maturity-assign"}:
+            maturity.add_argument("--owner", required=True)
+        if command == "maturity-create":
+            maturity.add_argument("--assurance-id", action="append", required=True)
+        if command == "maturity-assess":
+            maturity.add_argument("capability")
+            maturity.add_argument("--gap", action="append")
+            maturity.add_argument("--note", action="append")
+        if command == "maturity-transition":
+            maturity.add_argument("level", choices=("initial", "defined", "managed", "measured", "improving"))
+        if command == "maturity-plan-add":
+            maturity.add_argument("--improvement", action="append", required=True)
+            maturity.add_argument("--capability", action="append", required=True)
+            maturity.add_argument("--finding", action="append", default=[])
+            maturity.add_argument("--supersedes")
+        if command == "maturity-plan-review":
+            maturity.add_argument("plan_id")
+            maturity.add_argument("state", choices=("reviewed", "deferred", "completed"))
+            maturity.add_argument("--note", required=True)
+        maturity.add_argument("--workspace", type=_path_argument)
+        maturity.add_argument("--json", action="store_true")
+
+    for command in ("assurance-operations", "assurance-findings", "assurance-review-cycle", "assurance-coverage",
+                    "assurance-operation-create", "assurance-operation-review", "assurance-operation-transition",
+                    "assurance-operation-assign", "assurance-operation-note"):
+        operation = local_commands.add_parser(command, help="Developer-only assurance operations and manual review cycles.")
+        if command not in {"assurance-operations", "assurance-findings", "assurance-coverage"}:
+            operation.add_argument("id", help="Assurance ID for create/review-cycle; otherwise operation ID.")
+        if command.startswith("assurance-operation-"):
+            operation.add_argument("--reason", required=True)
+            operation.add_argument("--actor", default="developer")
+        if command in {"assurance-operation-create", "assurance-operation-assign"}:
+            operation.add_argument("--owner", required=True)
+        if command == "assurance-operation-transition":
+            operation.add_argument("state", choices=("reviewing", "improved", "accepted", "closed"))
+        if command == "assurance-operation-note":
+            operation.add_argument("--note", required=True)
+        operation.add_argument("--workspace", type=_path_argument)
+        operation.add_argument("--json", action="store_true")
+
+    for command in ("assurance-status", "assurance-history", "assurance-review", "assurance-check", "assurance-improvements",
+                    "assurance-register", "assurance-transition", "assurance-assign", "assurance-schedule", "assurance-note", "assurance-record-check"):
+        governance = local_commands.add_parser(command, help="Developer-only continuous recovery governance.")
+        if command not in {"assurance-status", "assurance-check", "assurance-improvements"}:
+            governance.add_argument("id")
+        if command in {"assurance-register", "assurance-transition", "assurance-assign", "assurance-schedule", "assurance-note", "assurance-record-check"}:
+            governance.add_argument("--reason", required=True)
+            governance.add_argument("--actor", default="developer")
+        if command in {"assurance-register", "assurance-assign"}:
+            governance.add_argument("--owner", required=True)
+            governance.add_argument("--responsibility", required=True)
+        if command in {"assurance-register", "assurance-schedule"}:
+            governance.add_argument("--every-hours", type=int, required=True)
+        if command == "assurance-transition":
+            governance.add_argument("state", choices=("active", "paused", "expired", "retired"))
+        if command == "assurance-note":
+            governance.add_argument("--kind", choices=("review", "improvement"), required=True)
+            governance.add_argument("--note", required=True)
+        if command == "assurance-record-check":
+            governance.add_argument("--verification-id", required=True)
+        governance.add_argument("--workspace", type=_path_argument)
+        governance.add_argument("--json", action="store_true")
+
+    for command in ("recovery-assurance", "recovery-evidence", "recovery-history-analysis", "recovery-verify-history",
+                    "assurance-create", "assurance-verify", "assurance-expire"):
+        assurance = local_commands.add_parser(command, help="Inspect developer recovery assurance and retain evidence.")
+        if command != "recovery-history-analysis":
+            assurance.add_argument("id", help="Scenario ID for reports/create; assurance ID for verify/expire.")
+        if command in {"assurance-create", "assurance-expire"}:
+            assurance.add_argument("--reason", required=True)
+        elif command == "assurance-verify":
+            assurance.add_argument("--reason", default="Verify recovery assurance evidence")
+        if command.startswith("assurance-"):
+            assurance.add_argument("--actor", default="developer")
+        if command == "assurance-create":
+            assurance.add_argument("--owner", default="developer")
+            assurance.add_argument("--valid-for-hours", type=int, default=24, help="Evidence validity, 1 to 8760 hours (default 24).")
+        assurance.add_argument("--workspace", type=_path_argument)
+        assurance.add_argument("--json", action="store_true")
+
+    for command in ("disaster-create", "disaster-status", "disaster-inspect", "disaster-check",
+                    "disaster-test", "disaster-retire", "continuity-status"):
+        disaster = local_commands.add_parser(command, help="Preserve developer continuity and validate recovery references.")
+        if command not in {"disaster-status", "continuity-status"}:
+            disaster.add_argument("id", help="Deployment ID for create; otherwise disaster scenario ID.")
+        if command in {"disaster-create", "disaster-retire"}:
+            disaster.add_argument("--reason", required=True)
+        elif command == "disaster-test":
+            disaster.add_argument("--reason", default="Validate recovery references without execution")
+        if command in {"disaster-create", "disaster-retire", "disaster-test"}:
+            disaster.add_argument("--actor", default="developer")
+        if command == "disaster-create":
+            disaster.add_argument("--owner", default="developer")
+            disaster.add_argument("--type", dest="scenario_type", default="configuration_failure",
+                                  choices=("configuration_failure", "deployment_failure", "rollback_unavailable", "history_loss"))
+            disaster.add_argument("--plan-id", help="Recovery plan for this deployment; defaults to its latest plan.")
+            disaster.add_argument("--step", action="append", help="Manual restoration instruction; repeat to replace default steps.")
+        disaster.add_argument("--workspace", type=_path_argument)
+        disaster.add_argument("--json", action="store_true")
+
+    for command in ("reliability-check", "recovery-plan-create", "recovery-plan-status",
+                    "recovery-plan-inspect", "recovery-verify", "readiness-create",
+                    "readiness-check", "readiness-expire", "readiness-status"):
+        reliability = local_commands.add_parser(command, help="Prepare developer readiness and recovery without execution.")
+        if command not in {"recovery-plan-status", "readiness-status"}:
+            reliability.add_argument("id", help="Deployment ID for create/reliability; otherwise plan or readiness ID.")
+        if command in {"recovery-plan-create", "readiness-create", "readiness-expire"}:
+            reliability.add_argument("--reason", required=True)
+        elif command in {"recovery-verify", "readiness-check"}:
+            reliability.add_argument("--reason", default="Verify recovery prerequisites" if command == "recovery-verify"
+                                     else "Check deployment readiness")
+        if command in {"recovery-plan-create", "readiness-create", "readiness-expire", "recovery-verify", "readiness-check"}:
+            reliability.add_argument("--actor", default="developer")
+        if command == "recovery-plan-create":
+            reliability.add_argument("--owner", default="developer")
+        reliability.add_argument("--workspace", type=_path_argument)
+        reliability.add_argument("--json", action="store_true")
+
+    for command in ("incident-create", "incident-status", "incident-inspect", "incident-investigate",
+                    "incident-resolve", "incident-close", "incident-diff", "recovery-history", "deploy-health"):
+        operation = local_commands.add_parser(command, help="Track developer deployment operations without recovery actions.")
+        if command == "incident-diff":
+            operation.add_argument("incident_a")
+            operation.add_argument("incident_b")
+        elif command not in {"incident-status", "recovery-history"}:
+            operation.add_argument("id", help="Deployment ID for create/health; otherwise incident operation ID.")
+        if command in {"incident-create", "incident-investigate", "incident-resolve", "incident-close"}:
+            operation.add_argument("--reason", required=True)
+            operation.add_argument("--actor", default="developer")
+        if command == "incident-create":
+            operation.add_argument("--owner", default="developer")
+        if command == "incident-resolve":
+            operation.add_argument("--recovery-action", required=True, help="Description of the manually completed recovery.")
+            operation.add_argument("--rollback-reference", help="Existing rollback audit event ID for this deployment.")
+        operation.add_argument("--workspace", type=_path_argument)
+        operation.add_argument("--json", action="store_true")
+
+    for command in ("deploy-status", "deploy-diff", "deploy-stage", "deploy-validate",
+                    "deploy-audit", "deploy-governance-check", "deploy-history", "deploy-inspect",
+                    "deploy-activate", "deploy-pause", "deploy-resume", "deploy-retire", "deploy-rollback"):
+        deployment = local_commands.add_parser(command, help="Control developer deployment references.")
+        if command == "deploy-diff":
+            deployment.add_argument("deployment_a")
+            deployment.add_argument("deployment_b")
+        elif command in {"deploy-audit", "deploy-governance-check", "deploy-inspect"}:
+            deployment.add_argument("id", help="Deployment ID to investigate without changes.")
+        elif command not in {"deploy-status", "deploy-history"}:
+            deployment.add_argument("id", help="Configuration ID for stage; otherwise deployment ID.")
+            deployment.add_argument("--reason", required=True)
+            deployment.add_argument("--actor", default="developer")
+        deployment.add_argument("--workspace", type=_path_argument)
+        deployment.add_argument("--json", action="store_true")
+
+    for command in ("config-status", "config-history", "config-diff", "config-create",
+                    "config-validate", "config-activate", "config-retire", "config-rollback"):
+        configuration = local_commands.add_parser(command, help="Manage developer configuration snapshots.")
+        if command == "config-diff":
+            configuration.add_argument("version_a", type=int)
+            configuration.add_argument("version_b", type=int)
+        elif command not in {"config-status", "config-history"}:
+            configuration.add_argument("id", help="Source promotion ID for create; otherwise configuration ID.")
+            configuration.add_argument("--reason", required=True, help="Reason recorded in configuration history.")
+            configuration.add_argument("--actor", default="developer")
+        configuration.add_argument("--workspace", type=_path_argument)
+        configuration.add_argument("--json", action="store_true")
+
     for command in ("optimize-promote", "optimize-promotion-status", "optimize-retire",
                     "optimize-promote-rollback", "optimize-promotion-check"):
         promotion = local_commands.add_parser(command, help="Manage developer retrieval promotions.")
@@ -721,6 +1005,258 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
                                      options.conflict_note)
         else:
             payload = actions[options.local_command](developer, options.id, options.reviewer, options.reason)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith(("governance-decision", "governance-action", "governance-exception")) or options.local_command in {"governance-followup", "governance-close-check"}:
+        from src.developer import governance_operations as operations
+        command = options.local_command.removeprefix("governance-")
+        if command in {"decisions", "actions", "exceptions", "followup", "close-check"}:
+            payload = getattr(operations, command.replace("-", "_"))(developer)
+        elif command == "decision":
+            payload = operations.decision(developer, options.id)
+        elif command == "decision-create":
+            payload = operations.create(developer, options.id, options.decision, options.owner, options.reason, options.actor)
+        elif command == "decision-review":
+            payload = operations.record_review(developer, options.id, options.note, options.evidence, options.closure_reason, options.reason, options.actor)
+        elif command == "decision-transition":
+            payload = operations.transition(developer, options.id, options.state, options.note, options.reason, options.actor)
+        elif command == "decision-assign":
+            payload = operations.assign(developer, options.id, options.owner, options.reason, options.actor)
+        elif command == "action-add":
+            payload = operations.add_action(developer, options.id, options.description, options.owner, options.due_date, options.reason, options.actor)
+        elif command == "action-assign":
+            payload = operations.assign_action(developer, options.id, options.action_id, options.owner, options.due_date, options.reason, options.actor)
+        elif command == "action-transition":
+            payload = operations.transition_action(developer, options.id, options.action_id, options.state, options.note, options.evidence, options.closure_reason, options.reason, options.actor)
+        elif command == "action-defer":
+            payload = operations.defer_action(developer, options.id, options.action_id, options.until, options.note, options.reason, options.actor)
+        elif command == "exception-add":
+            payload = operations.add_exception(developer, options.id, options.description, options.owner, options.expires_at, options.reason, options.action_id, options.actor)
+        elif command == "exception-assign":
+            payload = operations.assign_exception(developer, options.id, options.exception_id, options.owner, options.reason, options.actor)
+        else:
+            payload = operations.transition_exception(developer, options.id, options.exception_id, options.state, options.note, options.evidence, options.closure_reason, options.reason, options.actor)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("governance-"):
+        from src.developer import strategic_governance as strategic
+        command = options.local_command.removeprefix("governance-")
+        if command in {"status", "dependencies", "plan-review"}:
+            payload = {"status": strategic.status, "dependencies": strategic.dependencies, "plan-review": strategic.plan_review}[command](developer)
+        elif command in {"history", "review"}:
+            payload = getattr(strategic, command)(developer, options.id)
+        elif command in {"create", "update"}:
+            fields = (options.owner, options.capability, options.evolution_id, options.dependency, options.note, options.risk, options.reason, options.actor)
+            payload = strategic.create(developer, options.id, *fields) if command == "create" else strategic.update(developer, options.id, options.objective, *fields)
+        elif command == "transition":
+            payload = strategic.transition(developer, options.id, options.state, options.note, options.reason, options.actor)
+        elif command == "record-review":
+            payload = strategic.record_review(developer, options.id, options.note, options.reason, options.actor)
+        elif command in {"roadmap-add", "roadmap-update"}:
+            fields = (options.description, options.owner, options.target_period, options.dependency, options.reason, options.actor)
+            payload = strategic.add_roadmap(developer, options.id, *fields) if command == "roadmap-add" else strategic.update_roadmap(developer, options.id, options.roadmap_id, *fields)
+        elif command == "roadmap-transition":
+            payload = strategic.transition_roadmap(developer, options.id, options.roadmap_id, options.state, options.note, options.reason, options.actor)
+        else:
+            payload = strategic.review_dependency(developer, options.id, options.dependency, options.resolution, options.note, options.reason, options.roadmap_id, options.actor)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("evolution-"):
+        from src.developer import evolution
+        command = options.local_command.removeprefix("evolution-")
+        if command in {"status", "plan"}:
+            payload = {"status": evolution.status, "plan": evolution.plans}[command](developer)
+        elif command in {"history", "impact", "review"}:
+            payload = getattr(evolution, command)(developer, options.id)
+        elif command == "create":
+            payload = evolution.create(developer, options.id, options.change_type, options.owner, options.reason, options.actor)
+        elif command == "transition":
+            payload = evolution.transition(developer, options.id, options.state, options.note, options.reason, options.actor)
+        elif command == "impact-add":
+            payload = evolution.record_impact(developer, options.id, options.capability, options.maturity_id,
+                options.finding, options.note, options.risk, options.reason, options.actor)
+        else:
+            payload = evolution.add_plan(developer, options.id, options.improvement, options.dependency,
+                options.milestone, options.owner, options.reason, options.supersedes, options.actor)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("maturity-"):
+        from src.developer import maturity
+        command = options.local_command.removeprefix("maturity-")
+        if command in {"status", "readiness", "plan"}:
+            payload = {"status": maturity.status, "readiness": maturity.readiness, "plan": maturity.plans}[command](developer)
+        elif command in {"history", "review"}:
+            payload = getattr(maturity, command)(developer, options.id)
+        elif command == "create":
+            payload = maturity.create(developer, options.id, options.assurance_id, options.owner, options.reason, options.actor)
+        elif command == "assess":
+            payload = maturity.assess(developer, options.id, options.capability, options.reason, options.gap, options.note, options.actor)
+        elif command == "assign":
+            payload = maturity.assign(developer, options.id, options.owner, options.reason, options.actor)
+        elif command == "transition":
+            payload = maturity.transition(developer, options.id, options.level, options.reason, options.actor)
+        elif command == "plan-add":
+            payload = maturity.add_plan(developer, options.id, options.improvement, options.capability, options.finding,
+                                        options.reason, options.supersedes, options.actor)
+        else:
+            payload = maturity.review_plan(developer, options.id, options.plan_id, options.state, options.note, options.reason, options.actor)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command in {"assurance-operations", "assurance-findings", "assurance-review-cycle", "assurance-coverage", "assurance-improvements",
+                                 "assurance-operation-create", "assurance-operation-review", "assurance-operation-transition",
+                                 "assurance-operation-assign", "assurance-operation-note"}:
+        from src.developer import assurance_operations as operations
+        command = options.local_command.removeprefix("assurance-")
+        if command in {"operations", "findings", "coverage", "improvements"}:
+            payload = getattr(operations, command)(developer)
+        elif command == "review-cycle":
+            payload = operations.review_cycle(developer, options.id)
+        elif command == "operation-create":
+            payload = operations.create(developer, options.id, options.reason, options.owner, options.actor)
+        elif command == "operation-review":
+            payload = operations.record_review(developer, options.id, options.reason, options.actor)
+        else:
+            action = command.removeprefix("operation-")
+            fields = {"transition": {"status": "state"}, "assign": {"owner": "owner"}, "note": {"note": "note"}}[action]
+            payload = operations.change(developer, options.id, action, options.reason, options.actor,
+                                        **{key: getattr(options, name) for key, name in fields.items()})
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command in {"assurance-status", "assurance-history", "assurance-review", "assurance-check", "assurance-improvements",
+                                 "assurance-register", "assurance-transition", "assurance-assign", "assurance-schedule", "assurance-note", "assurance-record-check"}:
+        from src.developer import recovery_governance as governance
+        command = options.local_command.removeprefix("assurance-")
+        if command in {"status", "check", "improvements"}:
+            payload = getattr(governance, command)(developer)
+        elif command in {"history", "review"}:
+            payload = getattr(governance, command)(developer, options.id)
+        elif command == "register":
+            payload = governance.register(developer, options.id, options.reason, options.owner,
+                                          options.responsibility, options.every_hours, options.actor)
+        elif command == "record-check":
+            payload = governance.record_check(developer, options.id, options.verification_id, options.reason, options.actor)
+        else:
+            fields = {"transition": ("status",), "assign": ("owner", "responsibility"),
+                      "schedule": ("interval_hours",), "note": ("kind", "note")}[command]
+            aliases = {"status": "state", "interval_hours": "every_hours"}
+            payload = governance.change(developer, options.id, command, options.reason, options.actor,
+                                        **{key: getattr(options, aliases.get(key, key)) for key in fields})
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if (options.local_command.startswith("assurance-") or options.local_command in
+            {"recovery-assurance", "recovery-evidence", "recovery-history-analysis", "recovery-verify-history"}):
+        from src.developer import assurance
+        command = options.local_command
+        if command == "assurance-create":
+            payload = assurance.create_assurance(developer, options.id, options.reason, options.owner,
+                                                  options.actor, options.valid_for_hours)
+        elif command == "assurance-verify":
+            payload = assurance.verify_assurance(developer, options.id, options.reason, options.actor)
+        elif command == "assurance-expire":
+            payload = assurance.transition_assurance(developer, options.id, "expired", options.reason, options.actor)
+        elif command == "recovery-history-analysis":
+            payload = assurance.recovery_history_analysis(developer)
+        else:
+            payload = {"recovery-assurance": assurance.recovery_assurance,
+                       "recovery-evidence": assurance.recovery_evidence,
+                       "recovery-verify-history": assurance.recovery_verify_history}[command](developer, options.id)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("disaster-") or options.local_command == "continuity-status":
+        from src.developer import continuity
+        command = options.local_command
+        if command == "disaster-create":
+            payload = continuity.create_scenario(developer, options.id, options.reason, options.owner,
+                                                 options.scenario_type, options.plan_id, options.actor, options.step)
+        elif command in {"disaster-status", "continuity-status"}:
+            payload = (continuity.disaster_status if command == "disaster-status" else continuity.continuity_status)(developer)
+        elif command == "disaster-test":
+            payload = continuity.test_scenario(developer, options.id, options.reason, options.actor)
+        elif command == "disaster-retire":
+            payload = continuity.transition_scenario(developer, options.id, "retired", options.reason, options.actor)
+        else:
+            payload = (continuity.disaster_check if command == "disaster-check"
+                       else continuity.disaster_inspect)(developer, options.id)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if (options.local_command.startswith(("recovery-plan-", "readiness-"))
+            or options.local_command in {"reliability-check", "recovery-verify"}):
+        from src.developer import reliability
+        command = options.local_command
+        if command == "recovery-plan-create":
+            payload = reliability.create_recovery_plan(developer, options.id, options.reason, options.owner, options.actor)
+        elif command == "readiness-create":
+            payload = reliability.create_readiness(developer, options.id, options.reason, options.actor)
+        elif command in {"readiness-check", "recovery-verify"}:
+            payload = (reliability.check_readiness if command == "readiness-check"
+                       else reliability.verify_recovery)(developer, options.id, options.reason, options.actor)
+        elif command == "readiness-expire":
+            payload = reliability.transition_readiness(developer, options.id, "expired", options.reason, options.actor)
+        elif command in {"recovery-plan-status", "readiness-status"}:
+            payload = (reliability.recovery_plan_status if command == "recovery-plan-status"
+                       else reliability.readiness_status)(developer)
+        else:
+            payload = (reliability.reliability_check if command == "reliability-check"
+                       else reliability.recovery_plan_inspect)(developer, options.id)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if (options.local_command.startswith("incident-")
+            or options.local_command in {"recovery-history", "deploy-health"}):
+        from src.developer import operations
+        command = options.local_command
+        if command == "incident-create":
+            payload = operations.create_incident(developer, options.id, options.reason, options.owner, options.actor)
+        elif command in {"incident-status", "recovery-history"}:
+            payload = (operations.incident_status if command == "incident-status"
+                       else operations.recovery_history)(developer)
+        elif command in {"incident-inspect", "deploy-health"}:
+            payload = (operations.incident_inspect if command == "incident-inspect"
+                       else operations.deployment_health)(developer, options.id)
+        elif command == "incident-diff":
+            payload = operations.incident_diff(developer, options.incident_a, options.incident_b)
+        else:
+            status = {"incident-investigate": "investigating", "incident-resolve": "resolved",
+                      "incident-close": "closed"}[command]
+            payload = operations.transition_incident(
+                developer, options.id, status, options.reason, options.actor,
+                getattr(options, "recovery_action", None), getattr(options, "rollback_reference", None))
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("deploy-"):
+        from src.developer.deployment import (
+            deployment_status, deployment_diff, stage_deployment, transition_deployment,
+            deployment_audit, deployment_governance_check, deployment_history, deployment_inspect,
+        )
+        action = options.local_command.removeprefix("deploy-")
+        if action == "status":
+            payload = deployment_status(developer)
+        elif action == "history":
+            payload = deployment_history(developer)
+        elif action in {"audit", "governance-check", "inspect"}:
+            payload = {"audit": deployment_audit, "governance-check": deployment_governance_check,
+                       "inspect": deployment_inspect}[action](developer, options.id)
+        elif action == "diff":
+            payload = deployment_diff(developer, options.deployment_a, options.deployment_b)
+        elif action == "stage":
+            payload = stage_deployment(developer, options.id, options.reason, options.actor)
+        else:
+            payload = transition_deployment(developer, options.id, action, options.reason, options.actor)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return payload
+    if options.local_command.startswith("config-"):
+        from src.developer.configuration import (
+            configuration_status, configuration_history, configuration_diff,
+            create_configuration, transition_configuration,
+        )
+        action = options.local_command.removeprefix("config-")
+        if action in {"status", "history"}:
+            payload = (configuration_status if action == "status" else configuration_history)(developer)
+        elif action == "diff":
+            payload = configuration_diff(developer, options.version_a, options.version_b)
+        elif action == "create":
+            payload = create_configuration(developer, options.id, options.reason, options.actor)
+        else:
+            payload = transition_configuration(developer, options.id, action, options.reason, options.actor)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return payload
     if options.local_command in {"optimize-promote", "optimize-promotion-status", "optimize-retire",

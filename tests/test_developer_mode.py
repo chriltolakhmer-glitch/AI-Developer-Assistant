@@ -1499,6 +1499,1479 @@ class DeveloperModeTests(unittest.TestCase):
         approve_review(self.developer, review["review_id"], "developer", "Approved settings and evidence")
         return candidate, cases
 
+    def _configuration_setup(self):
+        from src.developer.promotion import promote
+        from src.developer.configuration import create_configuration
+        candidate, _ = self._promotion_setup()
+        source = promote(self.developer, candidate["id"])
+        record = create_configuration(self.developer, source["promotion_id"], "Snapshot approved settings")
+        return source, record
+
+    def test_configuration_creation_validation_and_invalid_transitions(self):
+        from src.developer.configuration import configuration_history, transition_configuration
+        source, record = self._configuration_setup()
+        self.assertEqual(1, record["version"])
+        self.assertEqual("draft", record["status"])
+        self.assertEqual(source["retrieval_settings"], record["settings"])
+        self.assertEqual(source["promotion_id"], record["source_promotion"])
+        with self.assertRaisesRegex(LocalWorkflowError, "Invalid configuration transition"):
+            transition_configuration(self.developer, record["config_id"], "activate", "Premature")
+        transition_configuration(self.developer, record["config_id"], "validate", "Evidence checked")
+        with self.assertRaises(LocalWorkflowError):
+            transition_configuration(self.developer, record["config_id"], "validate", "Repeat")
+        with self.assertRaises(LocalWorkflowError):
+            transition_configuration(self.developer, record["config_id"], "activate", " ")
+        self.assertEqual(2, len(configuration_history(self.developer)["events"]))
+
+    def test_configuration_activation_rollback_and_history_preservation(self):
+        from src.developer.configuration import (
+            create_configuration, transition_configuration, configuration_history, configuration_status,
+        )
+        source, first = self._configuration_setup()
+        directory = self.workspace_path / "optimization" / "configurations"
+        original = {p: p.read_bytes() for p in directory.glob("*.json")}
+        for action in ("validate", "activate"):
+            transition_configuration(self.developer, first["config_id"], action, "First snapshot")
+        second = create_configuration(self.developer, source["promotion_id"], "Second snapshot")
+        self.assertEqual(2, second["version"])
+        self.assertEqual(first["config_id"], second["previous_active"])
+        for action in ("validate", "activate"):
+            transition_configuration(self.developer, second["config_id"], action, "Second snapshot")
+        state = configuration_history(self.developer)
+        self.assertEqual("retired", state["configurations"][0]["status"])
+        self.assertEqual(first["config_id"], state["events"][-1]["retired_configuration"])
+        with self.assertRaises(LocalWorkflowError):
+            transition_configuration(self.developer, first["config_id"], "rollback", "Out of order")
+        transition_configuration(self.developer, second["config_id"], "rollback", "Restore prior reference")
+        self.assertEqual(first["config_id"], configuration_status(self.developer)["active"])
+        transition_configuration(self.developer, first["config_id"], "rollback", "Restore empty reference")
+        self.assertIsNone(configuration_status(self.developer)["active"])
+        self.assertEqual(["rolled_back", "rolled_back"],
+                         [r["status"] for r in configuration_history(self.developer)["configurations"]])
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_configuration_diff_nested_added_removed_changed_and_versions(self):
+        from src.developer.configuration import settings_diff, configuration_diff, create_configuration
+        diff = settings_diff({"ranking": {"symbol_weight": 1}, "old": True},
+                             {"ranking": {"symbol_weight": 2}, "context": {"max_files": 10}})
+        self.assertEqual([{"path": ["ranking", "symbol_weight"], "previous": 1, "value": 2}], diff["changed"])
+        self.assertEqual([{"path": ["old"], "previous": True}], diff["removed"])
+        self.assertEqual([{"path": ["context"], "value": {"max_files": 10}}], diff["added"])
+        source, _ = self._configuration_setup()
+        create_configuration(self.developer, source["promotion_id"], "Another immutable snapshot")
+        self.assertEqual([], configuration_diff(self.developer, 1, 2)["changed"])
+        with self.assertRaises(LocalWorkflowError):
+            configuration_diff(self.developer, 1, 99)
+
+    def test_configuration_policy_approval_and_promotion_compatibility(self):
+        from src.developer.configuration import transition_configuration, configuration_status
+        from src.developer.promotion import retire, active_configuration
+        source, record = self._configuration_setup()
+        before = active_configuration(self.developer)
+        with patch("src.developer.promotion.policy_check", return_value={"blocked": [{"check": "policy"}]}):
+            with self.assertRaisesRegex(LocalWorkflowError, "policy"):
+                transition_configuration(self.developer, record["config_id"], "validate", "Blocked")
+        transition_configuration(self.developer, record["config_id"], "validate", "Valid")
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            with self.assertRaisesRegex(LocalWorkflowError, "approved"):
+                transition_configuration(self.developer, record["config_id"], "activate", "No approval")
+        transition_configuration(self.developer, record["config_id"], "activate", "Approved")
+        self.assertEqual(before, active_configuration(self.developer))
+        retire(self.developer, source["promotion_id"])
+        self.assertTrue(configuration_status(self.developer)["blocked"])
+
+    def test_configuration_stale_reference_and_retirement(self):
+        from src.developer.configuration import create_configuration, transition_configuration, configuration_status
+        source, first = self._configuration_setup()
+        stale = create_configuration(self.developer, source["promotion_id"], "Parallel draft")
+        for record in (first, stale):
+            transition_configuration(self.developer, record["config_id"], "validate", "Check")
+        transition_configuration(self.developer, first["config_id"], "activate", "Activate first")
+        with self.assertRaisesRegex(LocalWorkflowError, "reference changed"):
+            transition_configuration(self.developer, stale["config_id"], "activate", "Stale")
+        transition_configuration(self.developer, stale["config_id"], "retire", "Discard stale draft")
+        transition_configuration(self.developer, first["config_id"], "retire", "Retire active reference")
+        self.assertIsNone(configuration_status(self.developer)["active"])
+        with self.assertRaises(LocalWorkflowError):
+            transition_configuration(self.developer, first["config_id"], "activate", "Cannot reactivate")
+
+    def test_configuration_atomic_failure_corruption_and_read_only_status(self):
+        from src.developer.configuration import configuration_status, configuration_history, transition_configuration
+        self.assertIsNone(configuration_status(self.developer)["active"])
+        self.assertFalse((self.workspace_path / "optimization" / "configurations").exists())
+        _, record = self._configuration_setup()
+        before = configuration_history(self.developer)
+        with patch("src.developer.configuration.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaisesRegex(LocalWorkflowError, "Cannot append"):
+                transition_configuration(self.developer, record["config_id"], "validate", "Try append")
+        self.assertEqual(before, configuration_history(self.developer))
+        directory = self.workspace_path / "optimization" / "configurations"
+        self.assertFalse(list(directory.glob("*.tmp")))
+        path = next(directory.glob("*.json"))
+        event = json.loads(path.read_text())
+        event["configuration"]["version"] = 99
+        path.write_text(json.dumps(event))
+        with self.assertRaisesRegex(LocalWorkflowError, "Invalid configuration journal"):
+            configuration_history(self.developer)
+
+    def test_configuration_cli_and_audit_compatibility(self):
+        from src.developer.promotion import promote, promotion_check
+        from src.developer.governance import optimize_audit
+        candidate, _ = self._promotion_setup()
+        source = promote(self.developer, candidate["id"])
+        def cli(*arguments):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(("local", *arguments, "--workspace", str(self.workspace_path), "--json")))
+            return json.loads(output.getvalue())
+        record = cli("config-create", source["promotion_id"], "--reason", "CLI snapshot")
+        identifier = record["config_id"]
+        for command in ("config-validate", "config-activate"):
+            cli(command, identifier, "--reason", "CLI transition")
+        files = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        self.assertEqual(identifier, cli("config-status")["active"])
+        self.assertEqual(3, len(cli("config-history")["events"]))
+        self.assertFalse(cli("config-diff", "1", "1")["changed"])
+        self.assertFalse(promotion_check(self.developer)["blocked"])
+        self.assertEqual("clean", optimize_audit(self.developer)["audit_status"])
+        for path, content in files.items():
+            self.assertEqual(content, path.read_bytes())
+        cli("config-rollback", identifier, "--reason", "CLI restore")
+        cli("config-retire", identifier, "--reason", "CLI retire")
+        self.assertEqual("retired", cli("config-history")["configurations"][0]["status"])
+
+    def test_configuration_isolation_and_rollback_policy_failure(self):
+        from src.developer.configuration import (
+            create_configuration, transition_configuration, configuration_history, configuration_status,
+        )
+        from src.developer.local_workflow import _PROJECT_ROOT
+        for root in (_PROJECT_ROOT / "config-records", self.research_root / "config-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            with self.assertRaises(LocalWorkflowError):
+                configuration_status(isolated)
+            self.assertFalse(root.exists())
+        source, first = self._configuration_setup()
+        for action in ("validate", "activate"):
+            transition_configuration(self.developer, first["config_id"], action, "First")
+        second = create_configuration(self.developer, source["promotion_id"], "Second")
+        for action in ("validate", "activate"):
+            transition_configuration(self.developer, second["config_id"], action, "Second")
+        before = configuration_history(self.developer)
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            with self.assertRaises(LocalWorkflowError):
+                transition_configuration(self.developer, second["config_id"], "rollback", "Blocked restore")
+        self.assertEqual(before, configuration_history(self.developer))
+
+    def test_deployment_audit_lifecycle_is_append_only(self):
+        from src.developer import deployment as d
+        _, _, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        directory = self.workspace_path / "optimization" / "deployments"
+        before = {p: p.read_bytes() for p in directory.glob("*.json")}
+        for action in ("validate", "activate", "pause", "resume", "rollback", "retire"):
+            d.transition_deployment(self.developer, identifier, action, "Decision: " + action, "operator")
+        events = d.deployment_audit(self.developer, identifier)["events"]
+        self.assertEqual(["created", "staged", "validated", "activated", "paused", "resumed",
+                          "rolled_back", "retired"], [e["event_type"] for e in events])
+        self.assertEqual(len(events), len({e["event_id"] for e in events}))
+        for event in events:
+            self.assertEqual({"event_id", "deployment_id", "event_type", "created_at", "actor", "reason", "metadata"},
+                             set(event))
+            self.assertTrue(event["created_at"])
+        self.assertEqual("operator", events[2]["actor"])
+        self.assertEqual("Decision: validate", events[2]["reason"])
+        self.assertTrue(events[2]["metadata"]["validation"]["configuration_valid"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        events[0]["reason"] = "Attempted mutation"
+        self.assertNotEqual(events, d.deployment_audit(self.developer, identifier)["events"])
+
+    def test_deployment_audit_covers_atomic_replacement_and_restoration(self):
+        from src.developer import deployment as d
+        source, _, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, first["deployment_id"], action, "First")
+        second = self._next_deployment(source)
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, second["deployment_id"], action, "Second")
+        identifier = second["deployment_id"]
+        inspect = d.deployment_inspect(self.developer, identifier)
+        self.assertTrue(inspect["rollback"]["action_available"])
+        self.assertFalse(inspect["governance"]["blocked"])
+        retired = d.deployment_audit(self.developer, first["deployment_id"])["events"][-1]
+        self.assertEqual("retired", retired["event_type"])
+        self.assertEqual("superseded", retired["metadata"]["action"])
+        self.assertEqual(identifier, retired["metadata"]["trigger_deployment_id"])
+        d.transition_deployment(self.developer, identifier, "rollback", "Restore", "on-call")
+        restored = d.deployment_audit(self.developer, first["deployment_id"])["events"][-1]
+        rollback = d.deployment_audit(self.developer, identifier)["events"][-1]
+        self.assertEqual("activated", restored["event_type"])
+        self.assertEqual("restored", restored["metadata"]["action"])
+        self.assertEqual("rolled_back", rollback["event_type"])
+        self.assertEqual(restored["metadata"]["sequence"], rollback["metadata"]["sequence"])
+        self.assertEqual(first["deployment_id"], restored["deployment_id"])
+        self.assertEqual("on-call", restored["actor"])
+
+    def test_deployment_audit_rejects_invalid_records_and_missing_history(self):
+        from src.developer import deployment as d
+        _, _, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        directory = self.workspace_path / "optimization" / "deployments"
+        before = {p: p.read_bytes() for p in directory.glob("*.json")}
+        for action, reason, actor in (("invalid", "Why", "developer"), ("validate", "", "developer"),
+                                      ("validate", "Why", "")):
+            with self.assertRaises(LocalWorkflowError):
+                d.transition_deployment(self.developer, identifier, action, reason, actor)
+        self.assertEqual(before, {p: p.read_bytes() for p in directory.glob("*.json")})
+        tail = directory / "00000002.json"
+        original = json.loads(tail.read_text())
+        from copy import deepcopy
+        for key, value in (("event_type", "unknown"), ("deployment_id", "wrong"),
+                           ("reason", "rewritten"), ("metadata", {}), ("actor", "")):
+            event = deepcopy(original)
+            event["audit_records"][0][key] = value
+            tail.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaisesRegex(LocalWorkflowError, "audit records"):
+                d.deployment_audit(self.developer, identifier)
+            self.assertEqual("audit_history", d.deployment_governance_check(self.developer, identifier)["blocked"][0]["check"])
+        tail.write_bytes(before[tail])
+        (directory / "00000001.json").unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "journal"):
+            d.deployment_inspect(self.developer, identifier)
+
+    def test_deployment_audit_legacy_journal_compatibility(self):
+        from src.developer import deployment as d
+        import hashlib
+        from src.developer.local_workflow import _json_bytes
+        _, _, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        expected = d.deployment_audit(self.developer, identifier)
+        directory = self.workspace_path / "optimization" / "deployments"
+        digest = None
+        for path in sorted(directory.glob("*.json")):
+            event = json.loads(path.read_text())
+            event["schema_version"] = 1
+            event.pop("audit_records")
+            event["previous_digest"] = digest
+            path.write_bytes(_json_bytes(event))
+            digest = hashlib.sha256(_json_bytes(event)).hexdigest()
+        before = {p: p.read_bytes() for p in directory.glob("*.json")}
+        self.assertEqual(expected, d.deployment_audit(self.developer, identifier))
+        d.transition_deployment(self.developer, identifier, "validate", "Upgrade append")
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual(3, len(d.deployment_audit(self.developer, identifier)["events"]))
+
+    def test_deployment_governance_live_prerequisites_and_compatibility(self):
+        from src.developer import deployment as d
+        from src.developer.configuration import transition_configuration
+        _, config, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        staged = d.deployment_governance_check(self.developer, identifier)
+        self.assertEqual(["validation_evidence"], [x["check"] for x in staged["blocked"]])
+        d.transition_deployment(self.developer, identifier, "validate", "Validate")
+        good = d.deployment_governance_check(self.developer, identifier)
+        self.assertFalse(good["blocked"])
+        self.assertEqual({"ownership", "source_configuration", "promotion_approval", "validation_evidence",
+                          "lifecycle_state", "audit_history"}, {x["check"] for x in good["passed"]})
+        self.assertEqual("rollback_target", good["warnings"][0]["check"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            bad = d.deployment_governance_check(self.developer, identifier)
+            self.assertIn("promotion_approval", [x["check"] for x in bad["blocked"]])
+        transition_configuration(self.developer, config["config_id"], "retire", "Withdraw config")
+        bad = d.deployment_governance_check(self.developer, identifier)
+        self.assertIn("source_configuration", [x["check"] for x in bad["blocked"]])
+        self.assertTrue(d.deployment_inspect(self.developer, identifier)["audit_timeline"])
+
+    def test_deployment_investigation_cli_is_read_only(self):
+        from src.developer import deployment as d
+        source, config, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        d.transition_deployment(self.developer, identifier, "validate", "Validate")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        results = {}
+        for command in ("deploy-audit", "deploy-governance-check", "deploy-history", "deploy-inspect"):
+            output = StringIO()
+            args = [] if command == "deploy-history" else [identifier]
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", command, *args, "--workspace", str(self.workspace_path), "--json"]))
+            results[command] = json.loads(output.getvalue())
+        inspect = results["deploy-inspect"]
+        self.assertEqual(config["config_id"], inspect["deployment"]["configuration"]["config_id"])
+        self.assertEqual(source["promotion_id"], inspect["source_promotion"]["record"]["promotion_id"])
+        self.assertEqual(results["deploy-audit"]["events"], inspect["audit_timeline"])
+        self.assertEqual("validated", results["deploy-history"]["deployments"][0]["stage"])
+        self.assertEqual("validated", results["deploy-history"]["events"][0]["event_type"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertFalse(self.research_root.exists())
+
+    def test_deployment_investigation_empty_unknown_and_isolation(self):
+        from src.developer import deployment as d
+        self.assertEqual([], d.deployment_history(self.developer)["events"])
+        for reader in (d.deployment_audit, d.deployment_inspect, d.deployment_governance_check):
+            with self.assertRaisesRegex(LocalWorkflowError, "Unknown deployment"):
+                reader(self.developer, "missing")
+        self.assertFalse(self.workspace_path.exists())
+        for root in (local_workflow._PROJECT_ROOT / "audit-records", self.research_root / "audit-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            for reader in (d.deployment_audit, d.deployment_inspect):
+                with self.assertRaises(LocalWorkflowError):
+                    reader(isolated, "missing")
+            self.assertTrue(d.deployment_governance_check(isolated, "missing")["blocked"])
+            self.assertFalse(root.exists())
+
+    def test_operations_creation_types_ownership_and_history_links(self):
+        from src.developer import operations as o
+        _, _, deployed = self._deployment_setup()
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for kind in sorted(o.TYPES):
+            record = o.create_operation(self.developer, deployed["deployment_id"], kind, "Investigate", "on-call")
+            self.assertEqual(kind, record["type"])
+            self.assertEqual("open", record["status"])
+            self.assertEqual("on-call", record["owner"])
+            self.assertEqual(deployed["history"], record["deployment_snapshot"]["history"])
+            self.assertEqual("open", record["history"][0]["status"])
+        self.assertEqual(5, len(o._load(self.developer)["operations"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        record["history"].clear()
+        self.assertTrue(o._load(self.developer)["operations"][-1]["history"])
+
+    def test_operations_incident_lifecycle_and_atomic_recovery(self):
+        from src.developer import operations as o
+        _, _, deployed = self._deployment_setup()
+        incident = o.create_incident(self.developer, deployed["deployment_id"], "Unexpected behavior", "operator")
+        identifier = incident["operation_id"]
+        directory = self.workspace_path / "optimization" / "operations"
+        before = {p: p.read_bytes() for p in directory.glob("*.json")}
+        o.transition_incident(self.developer, identifier, "investigating", "Review evidence", "operator")
+        prior = o._load(self.developer)
+        with patch("src.developer.operations.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaises(LocalWorkflowError):
+                o.transition_incident(self.developer, identifier, "resolved", "Recovered", "operator", "Manual verification")
+        self.assertEqual(prior, o._load(self.developer))
+        self.assertFalse(list(directory.glob("*.tmp")))
+        resolved = o.transition_incident(self.developer, identifier, "resolved", "Recovered", "operator", "Manual verification")
+        history = o.recovery_history(self.developer)
+        recovery = history["recovery_actions"][0]
+        self.assertEqual(identifier, recovery["incident_id"])
+        self.assertEqual(recovery["operation_id"], resolved["resolution"]["recovery_id"])
+        self.assertEqual("resolved", recovery["status"])
+        self.assertEqual(1, len(o.incident_status(self.developer)["resolved"]))
+        closed = o.transition_incident(self.developer, identifier, "closed", "Investigation complete")
+        self.assertEqual(["open", "investigating", "resolved", "closed"], [e["status"] for e in closed["history"]])
+        self.assertEqual(1, len(o.incident_status(self.developer)["closed"]))
+        self.assertEqual(1, len(history["resolution_history"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_operations_invalid_transitions_and_attribution_do_not_write(self):
+        from src.developer import operations as o
+        _, _, deployed = self._deployment_setup()
+        identifier = o.create_incident(self.developer, deployed["deployment_id"], "Issue")["operation_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for status, reason, actor, recovery, rollback in (
+                ("closed", "Why", "developer", None, None), ("unknown", "Why", "developer", None, None),
+                ("open", "Why", "developer", None, None), ("investigating", "", "developer", None, None),
+                ("investigating", "Why", " ", None, None), ("resolved", "Why", "developer", None, None),
+                ("resolved", "Why", "developer", " ", None),
+                ("resolved", "Why", "developer", "Manual action", "missing"),
+                ("investigating", "Why", "developer", "Not allowed", None)):
+            with self.assertRaises(LocalWorkflowError):
+                o.transition_incident(self.developer, identifier, status, reason, actor, recovery, rollback)
+        for kind, owner in (("unknown", "developer"), ("incident", " ")):
+            with self.assertRaises(LocalWorkflowError):
+                o.create_operation(self.developer, deployed["deployment_id"], kind, "Why", owner)
+        with self.assertRaises(LocalWorkflowError):
+            o.create_incident(self.developer, "missing", "Why")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        o.transition_incident(self.developer, identifier, "resolved", "No change needed", recovery_action="Verified prerequisites")
+        o.transition_incident(self.developer, identifier, "closed", "Done")
+        for status in o.STATES:
+            with self.assertRaises(LocalWorkflowError):
+                o.transition_incident(self.developer, identifier, status, "Cannot reopen", recovery_action="Repeat")
+
+    def test_operations_health_inspection_and_governance_are_read_only(self):
+        from src.developer import deployment as d, operations as o
+        from src.developer.configuration import transition_configuration
+        _, config, deployed = self._deployment_setup()
+        identifier = deployed["deployment_id"]
+        incident = o.create_incident(self.developer, identifier, "Check readiness")
+        self.assertEqual("blocked", o.deployment_health(self.developer, identifier)["status"])
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, identifier, action, "Ready")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        health = o.deployment_health(self.developer, identifier)
+        self.assertEqual("active", health["deployment_state"])
+        self.assertEqual("warning", health["status"])  # Empty-reference first rollback.
+        self.assertTrue(health["rollback_available"])
+        self.assertEqual("validated", health["configuration_state"]["status"])
+        inspect = o.incident_inspect(self.developer, incident["operation_id"])
+        self.assertEqual(d.deployment_audit(self.developer, identifier)["events"], inspect["audit_events"])
+        self.assertEqual(incident["history"], inspect["investigation_history"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            self.assertEqual("blocked", o.deployment_health(self.developer, identifier)["status"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        transition_configuration(self.developer, config["config_id"], "retire", "Withdraw")
+        self.assertEqual("blocked", o.deployment_health(self.developer, identifier)["status"])
+        self.assertFalse(self.research_root.exists())
+
+    def test_operations_manual_rollback_references_and_comparison(self):
+        from src.developer import deployment as d, operations as o
+        source, _, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, first["deployment_id"], action, "First")
+        first_incident = o.create_incident(self.developer, first["deployment_id"], "First issue")["operation_id"]
+        second = self._next_deployment(source)
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, second["deployment_id"], action, "Second")
+        self.assertEqual("healthy", o.deployment_health(self.developer, second["deployment_id"])["status"])
+        incident = o.create_incident(self.developer, second["deployment_id"], "Second issue")["operation_id"]
+        d.transition_deployment(self.developer, second["deployment_id"], "rollback", "Manual rollback")
+        audit = d.deployment_audit(self.developer, second["deployment_id"])["events"][-1]
+        before = d.deployment_history(self.developer)
+        with self.assertRaises(LocalWorkflowError):
+            o.transition_incident(self.developer, first_incident, "resolved", "Wrong target", recovery_action="Rollback",
+                                  rollback_reference=audit["event_id"])
+        o.transition_incident(self.developer, incident, "resolved", "Verified", recovery_action="Manually rolled back",
+                              rollback_reference=audit["event_id"])
+        self.assertEqual(before, d.deployment_history(self.developer))
+        self.assertEqual(audit["event_id"], o.recovery_history(self.developer)["resolution_history"][0]["rollback_reference"])
+        diff = o.incident_diff(self.developer, first_incident, incident)
+        self.assertTrue(diff["configuration"]["changed"])
+        self.assertTrue(diff["timeline"]["changed"])
+        self.assertTrue(diff["resolution"]["changed"])
+        self.assertEqual(first["deployment_id"], diff["affected_deployments"]["a"])
+        with self.assertRaises(LocalWorkflowError):
+            o.incident_diff(self.developer, incident, "missing")
+
+    def test_operations_journal_corruption_and_deployment_links_fail_closed(self):
+        from src.developer import operations as o
+        from copy import deepcopy
+        _, _, deployed = self._deployment_setup()
+        incident = o.create_incident(self.developer, deployed["deployment_id"], "Issue")["operation_id"]
+        directory = self.workspace_path / "optimization" / "operations"
+        path = directory / "00000001.json"
+        original = json.loads(path.read_text())
+        for field, value in (("previous_digest", "bad"), ("sequence", 9), ("type", "unknown"),
+                             ("created_at", "2026-09-29T00:00:00"), ("owner", ""), ("operation_id", "wrong")):
+            event = deepcopy(original)
+            event[field] = value
+            path.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaisesRegex(LocalWorkflowError, "Invalid operations journal"):
+                o.incident_status(self.developer)
+        event = deepcopy(original)
+        event["deployment_snapshot"]["configuration"]["config_id"] = "wrong"
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaisesRegex(LocalWorkflowError, "history reference"):
+            o.incident_inspect(self.developer, incident)
+        path.write_text(json.dumps(original), encoding="utf-8")
+        o.transition_incident(self.developer, incident, "investigating", "Check")
+        path.unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "journal chain"):
+            o.recovery_history(self.developer)
+
+    def test_operations_empty_unknown_and_workspace_isolation(self):
+        from src.developer import operations as o
+        self.assertFalse(o.incident_status(self.developer)["active"])
+        self.assertFalse(o.recovery_history(self.developer)["incidents"])
+        for reader in (o.incident_inspect, o.deployment_health):
+            with self.assertRaises(LocalWorkflowError):
+                reader(self.developer, "missing")
+        self.assertFalse(self.workspace_path.exists())
+        for root in (local_workflow._PROJECT_ROOT / "operation-records", self.research_root / "operation-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            for reader in (o.incident_status, o.recovery_history):
+                with self.assertRaises(LocalWorkflowError):
+                    reader(isolated)
+            with self.assertRaises(LocalWorkflowError):
+                o.create_incident(isolated, "missing", "Do not write")
+            self.assertFalse(root.exists())
+
+    def test_operations_cli_workflow_and_read_only_reports(self):
+        from src.developer import operations as o
+        _, _, deployed = self._deployment_setup()
+        def run(command, *args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", command, *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        incident = run("incident-create", deployed["deployment_id"], "--owner", "on-call", "--reason", "Issue")
+        identifier = incident["operation_id"]
+        self.assertEqual("on-call", incident["owner"])
+        run("incident-investigate", identifier, "--reason", "Investigating")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        self.assertEqual("investigating", run("incident-status")["active"][0]["status"])
+        self.assertEqual(identifier, run("incident-inspect", identifier)["incident"]["operation_id"])
+        self.assertEqual("blocked", run("deploy-health", deployed["deployment_id"])["status"])
+        self.assertFalse(run("incident-diff", identifier, identifier)["configuration"]["changed"])
+        self.assertEqual(1, len(run("recovery-history")["incidents"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        resolved = run("incident-resolve", identifier, "--reason", "Done", "--recovery-action", "Verified manually")
+        with self.assertRaisesRegex(LocalWorkflowError, "not an incident"):
+            o.incident_inspect(self.developer, resolved["resolution"]["recovery_id"])
+        self.assertEqual("closed", run("incident-close", identifier, "--reason", "Reviewed")["status"])
+
+    def test_reliability_readiness_creation_failure_and_expiry(self):
+        from src.developer import reliability as r
+        _, _, deployed = self._deployment_setup()
+        record = r.create_readiness(self.developer, deployed["deployment_id"], "Prepare handoff", "on-call")
+        identifier = record["readiness_id"]
+        self.assertEqual("pending", record["status"])
+        self.assertEqual([], record["checks"])
+        self.assertEqual(deployed["history"], record["deployment_snapshot"]["history"])
+        directory = self.workspace_path / "optimization" / "reliability"
+        before = {p: p.read_bytes() for p in directory.glob("*.json")}
+        checked = r.check_readiness(self.developer, identifier)
+        self.assertEqual("failed", checked["status"])
+        self.assertEqual(["pending", "checking", "failed"], [h["status"] for h in checked["history"]])
+        self.assertIn("recovery_plan", [c["check"] for c in checked["checks"] if c["status"] == "blocked"])
+        self.assertTrue(r.readiness_status(self.developer)["readiness"][0]["evidence_current"])
+        expired = r.transition_readiness(self.developer, identifier, "expired", "Replace assessment")
+        self.assertEqual("expired", expired["status"])
+        self.assertEqual(checked["checks"], expired["checks"])
+        self.assertTrue(r.readiness_status(self.developer)["readiness"][0]["requires_new_check"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_reliability_readiness_pass_and_stale_evidence(self):
+        from src.developer import reliability as r, deployment as d, operations as o
+        _, _, deployed = self._deployment_setup()
+        identifier = deployed["deployment_id"]
+        d.transition_deployment(self.developer, identifier, "validate", "Validate readiness prerequisite")
+        plan = r.create_recovery_plan(self.developer, identifier, "Prepare recovery", "on-call")
+        verified = r.verify_recovery(self.developer, plan["plan_id"])
+        self.assertEqual("passed", verified["validation_status"])
+        self.assertIsNone(verified["rollback_target"])
+        self.assertIsNone(verified["previous_configuration"])
+        self.assertTrue(verified["verification"]["warnings"])
+        readiness = r.create_readiness(self.developer, identifier, "Check deployment")
+        checked = r.check_readiness(self.developer, readiness["readiness_id"])
+        self.assertEqual("passed", checked["status"])
+        self.assertFalse(d.deployment_status(self.developer)["active_deployment"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        status = r.readiness_status(self.developer)["readiness"][0]
+        self.assertTrue(status["evidence_current"])
+        self.assertFalse(status["requires_new_check"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        incident = o.create_incident(self.developer, identifier, "Handoff issue", "on-call")
+        stale = r.readiness_status(self.developer)["readiness"][0]
+        self.assertEqual("passed", stale["status"])
+        self.assertFalse(stale["evidence_current"])
+        self.assertTrue(stale["requires_new_check"])
+        report = r.reliability_check(self.developer, identifier)
+        self.assertIn("incident_consistency", [w["check"] for w in report["warnings"]])
+        self.assertEqual(incident["operation_id"], report["evidence"]["incidents"][0]["operation_id"])
+
+    def test_reliability_invalid_transitions_and_outcome_cannot_bypass_checks(self):
+        from src.developer import reliability as r
+        _, _, deployed = self._deployment_setup()
+        identifier = r.create_readiness(self.developer, deployed["deployment_id"], "Prepare")["readiness_id"]
+        for status in ("pending", "passed", "failed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                r.transition_readiness(self.developer, identifier, status, "Invalid")
+        r.transition_readiness(self.developer, identifier, "checking", "Start")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        with self.assertRaisesRegex(LocalWorkflowError, "outcome"):
+            r.transition_readiness(self.developer, identifier, "passed", "Cannot force pass")
+        for reason, actor in (("", "developer"), ("Reason", " ")):
+            with self.assertRaises(LocalWorkflowError):
+                r.create_readiness(self.developer, deployed["deployment_id"], reason, actor)
+        with self.assertRaises(LocalWorkflowError):
+            r.create_recovery_plan(self.developer, deployed["deployment_id"], "No owner", " ")
+        with self.assertRaises(LocalWorkflowError):
+            r.create_recovery_plan(self.developer, "missing", "Bad deployment")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        r.transition_readiness(self.developer, identifier, "failed", "Record failure")
+        with self.assertRaises(LocalWorkflowError):
+            r.check_readiness(self.developer, identifier)
+        r.transition_readiness(self.developer, identifier, "expired", "End assessment")
+        for status in r.STATES:
+            with self.assertRaises(LocalWorkflowError):
+                r.transition_readiness(self.developer, identifier, status, "Expired is terminal")
+
+    def test_reliability_recovery_plan_predecessor_and_manual_rollback_compatibility(self):
+        from src.developer import reliability as r, deployment as d, operations as o
+        source, config, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, first["deployment_id"], action, "First rollout")
+        second = self._next_deployment(source)
+        identifier = second["deployment_id"]
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, identifier, action, "Second rollout")
+        plan = r.create_recovery_plan(self.developer, identifier, "Recovery handoff", "recovery-owner")
+        self.assertEqual(first["deployment_id"], plan["rollback_target"])
+        self.assertEqual(first["deployment_id"], plan["previous_deployment"])
+        self.assertEqual(config["config_id"], plan["previous_configuration"]["config_id"])
+        self.assertEqual("pending", plan["validation_status"])
+        self.assertIn("recovery_validation", [b["check"] for b in r.reliability_check(self.developer, identifier)["blocked"]])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        verified = r.verify_recovery(self.developer, plan["plan_id"], actor="verifier")
+        self.assertEqual("passed", verified["validation_status"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertFalse(r.reliability_check(self.developer, identifier)["blocked"])
+        self.assertEqual(identifier, d.deployment_status(self.developer)["active_deployment"])
+        incident = o.create_incident(self.developer, identifier, "Investigate rollout")["operation_id"]
+        inspection = r.recovery_plan_inspect(self.developer, plan["plan_id"])
+        self.assertEqual(incident, inspection["incident_history"][0]["operation_id"])
+        self.assertEqual(d.deployment_audit(self.developer, identifier)["events"], inspection["audit_history"])
+        d.transition_deployment(self.developer, identifier, "rollback", "Explicit manual recovery")
+        audit = d.deployment_audit(self.developer, identifier)["events"][-1]
+        o.transition_incident(self.developer, incident, "resolved", "Verified rollback", recovery_action="Manual rollback",
+                              rollback_reference=audit["event_id"])
+        self.assertEqual("failed", r.verify_recovery(self.developer, plan["plan_id"])["validation_status"])
+        self.assertEqual(first["deployment_id"], d.deployment_status(self.developer)["active_deployment"])
+        self.assertEqual(audit["event_id"], o.recovery_history(self.developer)["resolution_history"][0]["rollback_reference"])
+
+    def test_reliability_live_governance_and_previous_configuration_validation(self):
+        from src.developer import reliability as r, deployment as d, configuration as c
+        source, config, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, first["deployment_id"], action, "First rollout")
+        second = self._next_deployment(source)
+        d.transition_deployment(self.developer, second["deployment_id"], "validate", "Validate second")
+        plan = r.create_recovery_plan(self.developer, second["deployment_id"], "Recovery")
+        r.verify_recovery(self.developer, plan["plan_id"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            report = r.reliability_check(self.developer, second["deployment_id"])
+            self.assertIn("governance", [b["check"] for b in report["blocked"]])
+            failed = r.verify_recovery(self.developer, plan["plan_id"])
+            self.assertEqual("failed", failed["validation_status"])
+        c.transition_configuration(self.developer, config["config_id"], "retire", "Withdraw rollback config")
+        failed = r.verify_recovery(self.developer, plan["plan_id"])
+        self.assertIn("previous_configuration", [b["check"] for b in failed["verification"]["blocked"]])
+        self.assertEqual(["pending", "passed", "failed", "failed"], [h["status"] for h in failed["history"]])
+        self.assertTrue(failed["history"][1]["verification"]["passed"])
+
+    def test_reliability_atomic_failures_and_interrupted_check_resume(self):
+        from src.developer import reliability as r
+        _, _, deployed = self._deployment_setup()
+        identifier = r.create_readiness(self.developer, deployed["deployment_id"], "Check")["readiness_id"]
+        before = r._load(self.developer)
+        with patch("src.developer.reliability.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaises(LocalWorkflowError):
+                r.check_readiness(self.developer, identifier)
+        self.assertEqual(before, r._load(self.developer))
+        real_link = r.os.link
+        calls = []
+        def fail_outcome(source, target):
+            calls.append(target)
+            if len(calls) == 2:
+                raise FileExistsError("Interrupted outcome")
+            return real_link(source, target)
+        with patch("src.developer.reliability.os.link", side_effect=fail_outcome):
+            with self.assertRaises(LocalWorkflowError):
+                r.check_readiness(self.developer, identifier)
+        self.assertEqual("checking", r._load(self.developer)["readiness"][0]["status"])
+        result = r.check_readiness(self.developer, identifier)
+        self.assertEqual(["pending", "checking", "failed"], [h["status"] for h in result["history"]])
+        directory = self.workspace_path / "optimization" / "reliability"
+        self.assertFalse(list(directory.glob("*.tmp")))
+        result["history"].clear()
+        self.assertTrue(r._load(self.developer)["readiness"][0]["history"])
+
+    def test_reliability_corrupt_journals_are_blocked_and_reads_do_not_repair(self):
+        from src.developer import reliability as r, operations as o
+        _, _, deployed = self._deployment_setup()
+        identifier = deployed["deployment_id"]
+        plan = r.create_recovery_plan(self.developer, identifier, "Prepare recovery")
+        r.verify_recovery(self.developer, plan["plan_id"])
+        o.create_incident(self.developer, identifier, "Issue")
+        for subdirectory, name, check in (("operations", "00000001.json", "incident_consistency"),
+                                          ("deployments", "00000002.json", "audit_completeness"),
+                                          ("reliability", "00000002.json", "recovery_plan")):
+            path = self.workspace_path / "optimization" / subdirectory / name
+            original = path.read_bytes()
+            path.write_text("{}", encoding="utf-8")
+            before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+            report = r.reliability_check(self.developer, identifier)
+            self.assertIn(check, [b["check"] for b in report["blocked"]])
+            self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+            path.write_bytes(original)
+        path = self.workspace_path / "optimization" / "reliability" / "00000002.json"
+        original = json.loads(path.read_text())
+        from copy import deepcopy
+        for key, value in (("previous_digest", "wrong"), ("identifier", "missing"),
+                           ("created_at", "2026-09-29T00:00:00"), ("verification", {"passed": [], "warnings": [], "blocked": []})):
+            event = deepcopy(original)
+            event[key] = value
+            path.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaisesRegex(LocalWorkflowError, "Invalid reliability journal"):
+                r.recovery_plan_status(self.developer)
+        path.write_text(json.dumps(original), encoding="utf-8")
+        (path.parent / "00000001.json").unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "journal chain"):
+            r.readiness_status(self.developer)
+
+    def test_reliability_empty_unknown_and_external_workspace_isolation(self):
+        from src.developer import reliability as r
+        self.assertEqual([], r.readiness_status(self.developer)["readiness"])
+        self.assertEqual([], r.recovery_plan_status(self.developer)["plans"])
+        for reader in (r.reliability_check, r.recovery_plan_inspect, r.verify_recovery):
+            with self.assertRaises(LocalWorkflowError):
+                reader(self.developer, "missing")
+        self.assertFalse(self.workspace_path.exists())
+        for root in (local_workflow._PROJECT_ROOT / "reliability-records", self.research_root / "reliability-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            for reader in (r.readiness_status, r.recovery_plan_status):
+                with self.assertRaises(LocalWorkflowError):
+                    reader(isolated)
+            for action in (r.create_readiness, r.create_recovery_plan):
+                with self.assertRaises(LocalWorkflowError):
+                    action(isolated, "missing", "Must not write")
+            with self.assertRaises(LocalWorkflowError):
+                r.reliability_check(isolated, "missing")
+            self.assertFalse(root.exists())
+
+    def test_reliability_cli_plan_handoff_and_read_only_reports(self):
+        from src.developer import deployment as d
+        _, _, deployed = self._deployment_setup()
+        identifier = deployed["deployment_id"]
+        d.transition_deployment(self.developer, identifier, "validate", "Validated prerequisite")
+        def run(command, *args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", command, *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        plan = run("recovery-plan-create", identifier, "--reason", "Prepare", "--owner", "first-owner")
+        replacement = run("recovery-plan-create", identifier, "--reason", "Handoff", "--owner", "second-owner")
+        plans = run("recovery-plan-status")["plans"]
+        self.assertFalse(plans[0]["active"])
+        self.assertTrue(plans[1]["active"])
+        self.assertEqual("first-owner", plans[0]["owner"])
+        verified = run("recovery-verify", replacement["plan_id"])
+        self.assertEqual("passed", verified["validation_status"])
+        ready = run("readiness-create", identifier, "--reason", "Assess")
+        self.assertEqual("passed", run("readiness-check", ready["readiness_id"])["status"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        report = run("reliability-check", identifier)
+        self.assertFalse(report["blocked"])
+        self.assertEqual(replacement["plan_id"], report["evidence"]["plan"]["plan_id"])
+        self.assertEqual("second-owner", run("recovery-plan-inspect", replacement["plan_id"])["plan"]["owner"])
+        self.assertEqual(plan["plan_id"], run("recovery-plan-inspect", plan["plan_id"])["plan"]["plan_id"])
+        self.assertTrue(run("readiness-status")["readiness"][0]["evidence_current"])
+        self.assertTrue(run("recovery-plan-status")["plans"][1]["verification_current"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertEqual("expired", run("readiness-expire", ready["readiness_id"], "--reason", "End handoff window")["status"])
+        self.assertFalse(self.research_root.exists())
+
+    def _assurance_setup(self, simulate=True):
+        from src.developer import continuity as c
+        _, config, deployed, plan = self._continuity_setup()
+        scenario = c.create_scenario(self.developer, deployed["deployment_id"], "Prepare assurance", "scenario-owner")
+        if simulate:
+            c.test_scenario(self.developer, scenario["scenario_id"])
+        return config, deployed, plan, scenario
+
+    def test_assurance_creation_lifecycle_and_immutable_evidence(self):
+        from src.developer import assurance as a, deployment as d
+        _, deployed, plan, scenario = self._assurance_setup()
+        record = a.create_assurance(self.developer, scenario["scenario_id"], "Capture assurance", "assurance-owner")
+        self.assertEqual("pending", record["status"])
+        self.assertEqual([], record["checks"])
+        self.assertEqual(scenario["scenario_id"], record["scenario_id"])
+        self.assertEqual("assurance-owner", record["owner"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        verified = a.verify_assurance(self.developer, record["assurance_id"])
+        self.assertEqual("passed", verified["status"])
+        self.assertEqual(["pending", "verifying", "passed"], [h["status"] for h in verified["history"]])
+        self.assertEqual(list(a.EVIDENCE_TYPES), [e["evidence_type"] for e in verified["evidence"]])
+        evidence = {e["evidence_type"]: e for e in verified["evidence"]}
+        self.assertEqual(plan["plan_id"], evidence["rollback_reference"]["source"])
+        self.assertEqual(d.deployment_audit(self.developer, deployed["deployment_id"])["events"],
+                         evidence["deployment_audit"]["content"]["record"])
+        self.assertTrue(all(e["status"] == "available" and e["checked_at"] and e["expires_at"] for e in verified["evidence"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        before_evidence = verified["evidence"]
+        expired = a.transition_assurance(self.developer, record["assurance_id"], "expired", "End assurance window")
+        self.assertEqual(before_evidence, expired["evidence"])
+        self.assertEqual(len(a.EVIDENCE_TYPES), len(a.recovery_evidence(self.developer, scenario["scenario_id"])["expired"]))
+        expired["evidence"][0]["status"] = "mutated"
+        self.assertEqual("available", a._load(self.developer)["assurances"][0]["evidence"][0]["status"])
+
+    def test_assurance_invalid_transitions_and_missing_simulation_warnings(self):
+        from src.developer import assurance as a
+        _, _, _, scenario = self._assurance_setup(simulate=False)
+        identifier = a.create_assurance(self.developer, scenario["scenario_id"], "Prepare")["assurance_id"]
+        for status in ("pending", "passed", "failed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                a.transition_assurance(self.developer, identifier, status, "Invalid")
+        a.transition_assurance(self.developer, identifier, "verifying", "Start")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        with self.assertRaisesRegex(LocalWorkflowError, "outcome"):
+            a.transition_assurance(self.developer, identifier, "passed", "Cannot force pass")
+        for kwargs in ({"owner": " "}, {"actor": ""}, {"valid_for_hours": 0}, {"valid_for_hours": True},
+                       {"valid_for_hours": 8761}, {"valid_for_hours": 1.5}):
+            with self.assertRaises(LocalWorkflowError):
+                a.create_assurance(self.developer, scenario["scenario_id"], "Invalid", **kwargs)
+        with self.assertRaises(LocalWorkflowError):
+            a.create_assurance(self.developer, scenario["scenario_id"], "")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        report = a.recovery_evidence(self.developer, scenario["scenario_id"])
+        self.assertEqual(["previous_simulations"], [e["evidence_type"] for e in report["missing"]])
+        self.assertTrue(report["warnings"])
+        result = a.verify_assurance(self.developer, identifier)
+        self.assertEqual("failed", result["status"])
+        self.assertIn("previous_checks", [c["check"] for c in result["checks"] if c["status"] == "blocked"])
+        with self.assertRaises(LocalWorkflowError):
+            a.verify_assurance(self.developer, identifier)
+        a.transition_assurance(self.developer, identifier, "expired", "Replace")
+        for status in a.STATES:
+            with self.assertRaises(LocalWorkflowError):
+                a.transition_assurance(self.developer, identifier, status, "Expired is terminal")
+
+    def test_assurance_time_expiration_is_read_only_and_new_evidence_can_replace_it(self):
+        from datetime import datetime, timedelta, timezone
+        from src.developer import assurance as a
+        _, _, _, scenario = self._assurance_setup()
+        start = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+        with patch("src.developer.assurance._now", return_value=start):
+            record = a.create_assurance(self.developer, scenario["scenario_id"], "One hour", valid_for_hours=1)
+            a.verify_assurance(self.developer, record["assurance_id"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        with patch("src.developer.assurance._now", return_value=start + timedelta(minutes=59)):
+            self.assertFalse(a.recovery_evidence(self.developer, scenario["scenario_id"])["expired"])
+        with patch("src.developer.assurance._now", return_value=start + timedelta(hours=1)):
+            report = a.recovery_assurance(self.developer, scenario["scenario_id"])
+            self.assertEqual("expired", report["recovery_readiness"])
+            self.assertEqual("passed", report["assurances"][0]["status"])
+            self.assertEqual(len(a.EVIDENCE_TYPES), len(report["evidence"]["expired"]))
+            self.assertIn("evidence_current", [b["check"] for b in a.recovery_verify_history(self.developer, scenario["scenario_id"])["blocked"]])
+            self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+            new = a.create_assurance(self.developer, scenario["scenario_id"], "Renew")
+            self.assertEqual("passed", a.verify_assurance(self.developer, new["assurance_id"])["status"])
+            self.assertEqual("passed", a.recovery_assurance(self.developer, scenario["scenario_id"])["recovery_readiness"])
+
+    def test_assurance_source_changes_expire_evidence_without_rewriting_history(self):
+        from src.developer import assurance as a, continuity as c, operations as o
+        _, deployed, _, scenario = self._assurance_setup()
+        identifier = a.create_assurance(self.developer, scenario["scenario_id"], "Capture")["assurance_id"]
+        a.verify_assurance(self.developer, identifier)
+        first = a.recovery_evidence(self.developer, scenario["scenario_id"])
+        second = a.recovery_evidence(self.developer, scenario["scenario_id"])
+        self.assertEqual([e["content_digest"] for e in first["available"]], [e["content_digest"] for e in second["available"]])
+        saved = a._load(self.developer)
+        incident = o.create_incident(self.developer, deployed["deployment_id"], "New investigation")
+        changed = a.recovery_assurance(self.developer, scenario["scenario_id"])
+        self.assertEqual("expired", changed["recovery_readiness"])
+        self.assertEqual(saved, a._load(self.developer))
+        self.assertTrue(changed["verification"]["blocked"])
+        o.transition_incident(self.developer, incident["operation_id"], "resolved", "Reviewed", recovery_action="Verified manually")
+        c.test_scenario(self.developer, scenario["scenario_id"])
+        replacement = a.create_assurance(self.developer, scenario["scenario_id"], "New observation")
+        a.verify_assurance(self.developer, replacement["assurance_id"])
+        self.assertFalse(a.recovery_verify_history(self.developer, scenario["scenario_id"])["blocked"])
+        self.assertEqual(1, len(a.recovery_history_analysis(self.developer)["recovery_history"]["resolution_history"]))
+
+    def test_assurance_missing_evidence_and_lost_continuity_fail_closed(self):
+        from src.developer import assurance as a
+        _, _, _, scenario = self._assurance_setup()
+        identifier = a.create_assurance(self.developer, scenario["scenario_id"], "Preserve evidence")["assurance_id"]
+        a.verify_assurance(self.developer, identifier)
+        retained = a._load(self.developer)
+        for folder, kind in (("reliability", "recovery_plan"), ("configurations", "configuration_history"),
+                             ("deployments", "deployment_audit"), ("continuity", "continuity_record")):
+            directory = self.workspace_path / "optimization" / folder
+            path = sorted(directory.glob("*.json"))[-1]
+            original = path.read_bytes()
+            path.write_text("{}", encoding="utf-8")
+            before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+            evidence = a.recovery_evidence(self.developer, scenario["scenario_id"])
+            self.assertIn(kind, [e["evidence_type"] for e in evidence["missing"]])
+            self.assertTrue(evidence["warnings"])
+            self.assertTrue(a.recovery_verify_history(self.developer, scenario["scenario_id"])["blocked"])
+            self.assertEqual(retained, a._load(self.developer))
+            self.assertTrue(a.recovery_history_analysis(self.developer)["unresolved_findings"])
+            self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+            path.write_bytes(original)
+
+    def test_assurance_history_analysis_preserves_failures_and_current_findings(self):
+        from src.developer import assurance as a, continuity as c
+        _, _, _, scenario = self._assurance_setup(simulate=False)
+        first = a.create_assurance(self.developer, scenario["scenario_id"], "Before simulation")
+        self.assertEqual("failed", a.verify_assurance(self.developer, first["assurance_id"])["status"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            self.assertEqual("failed", c.test_scenario(self.developer, scenario["scenario_id"])["status"])
+        c.test_scenario(self.developer, scenario["scenario_id"])
+        second = a.create_assurance(self.developer, scenario["scenario_id"], "Current evidence")
+        self.assertEqual("passed", a.verify_assurance(self.developer, second["assurance_id"])["status"])
+        result = a.recovery_history_analysis(self.developer)
+        self.assertEqual({"simulation", "assurance"}, {f["kind"] for f in result["failures"]})
+        self.assertEqual(["failed", "validated"], [t["status"] for t in result["simulation_history"]])
+        self.assertTrue(all(not f["blocked"] for f in result["unresolved_findings"]))
+        self.assertEqual("passed", a.recovery_assurance(self.developer, scenario["scenario_id"])["recovery_readiness"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            self.assertTrue(a.recovery_verify_history(self.developer, scenario["scenario_id"])["blocked"])
+        c.transition_scenario(self.developer, scenario["scenario_id"], "retired", "End scenario")
+        self.assertIn("scenario_state", [b["check"] for b in a.recovery_verify_history(self.developer, scenario["scenario_id"])["blocked"]])
+
+    def test_assurance_atomic_interruption_and_evidence_corruption(self):
+        from src.developer import assurance as a
+        from copy import deepcopy
+        _, _, _, scenario = self._assurance_setup()
+        with patch("src.developer.assurance.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaises(LocalWorkflowError):
+                a.create_assurance(self.developer, scenario["scenario_id"], "Attempt")
+        self.assertEqual([], a._load(self.developer)["assurances"])
+        identifier = a.create_assurance(self.developer, scenario["scenario_id"], "Capture")["assurance_id"]
+        real_link, calls = a.os.link, []
+        def fail_outcome(source, target):
+            calls.append(target)
+            if len(calls) == 2:
+                raise FileExistsError("Interrupted outcome")
+            return real_link(source, target)
+        with patch("src.developer.assurance.os.link", side_effect=fail_outcome):
+            with self.assertRaises(LocalWorkflowError):
+                a.verify_assurance(self.developer, identifier)
+        self.assertEqual("verifying", a._load(self.developer)["assurances"][0]["status"])
+        self.assertEqual([], a._load(self.developer)["assurances"][0]["evidence"])
+        self.assertEqual("passed", a.verify_assurance(self.developer, identifier)["status"])
+        directory = self.workspace_path / "optimization" / "assurance"
+        self.assertFalse(list(directory.glob("*.tmp")))
+        tail = directory / "00000003.json"
+        original = json.loads(tail.read_text())
+        mutations = [("content_digest", "wrong"), ("expires_at", "2099-01-01T00:00:00+00:00"),
+                     ("status", "expired"), ("evidence_id", "wrong")]
+        for field, value in mutations:
+            event = deepcopy(original)
+            event["report"]["evidence"][0][field] = value
+            tail.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaisesRegex(LocalWorkflowError, "immutable evidence"):
+                a.recovery_evidence(self.developer, scenario["scenario_id"])
+        tail.write_text(json.dumps(original), encoding="utf-8")
+        (directory / "00000001.json").unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "journal chain"):
+            a.recovery_history_analysis(self.developer)
+
+    def test_assurance_empty_unknown_and_workspace_isolation(self):
+        from src.developer import assurance as a
+        self.assertEqual([], a.recovery_history_analysis(self.developer)["assurance_history"])
+        for reader in (a.recovery_assurance, a.recovery_evidence, a.recovery_verify_history):
+            with self.assertRaises(LocalWorkflowError):
+                reader(self.developer, "missing")
+        with self.assertRaises(LocalWorkflowError):
+            a.create_assurance(self.developer, "missing", "Unknown scenario")
+        self.assertFalse(self.workspace_path.exists())
+        for root in (local_workflow._PROJECT_ROOT / "assurance-records", self.research_root / "assurance-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            with self.assertRaises(LocalWorkflowError):
+                a.recovery_history_analysis(isolated)
+            with self.assertRaises(LocalWorkflowError):
+                a.create_assurance(isolated, "missing", "Must not write")
+            self.assertFalse(root.exists())
+
+    def test_assurance_cli_reports_are_read_only_and_recording_is_explicit(self):
+        _, _, _, scenario = self._assurance_setup()
+        def run(command, *args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", command, *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        identifier = scenario["scenario_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        self.assertEqual("pending", run("recovery-assurance", identifier)["recovery_readiness"])
+        self.assertFalse(run("recovery-evidence", identifier)["missing"])
+        self.assertFalse(run("recovery-verify-history", identifier)["blocked"])
+        self.assertEqual(1, len(run("recovery-history-analysis")["simulation_history"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertFalse((self.workspace_path / "optimization" / "assurance").exists())
+        record = run("assurance-create", identifier, "--reason", "Capture", "--owner", "on-call", "--valid-for-hours", "1")
+        self.assertEqual("on-call", record["owner"])
+        self.assertEqual("passed", run("assurance-verify", record["assurance_id"])["status"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        self.assertEqual("passed", run("recovery-assurance", identifier)["recovery_readiness"])
+        self.assertEqual(1, len(run("recovery-evidence", identifier)["recorded"]))
+        self.assertEqual(record["assurance_id"], run("recovery-verify-history", identifier)["previous_assurance"])
+        self.assertFalse(run("recovery-history-analysis")["failures"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertEqual("expired", run("assurance-expire", record["assurance_id"], "--reason", "End window")["status"])
+        self.assertFalse(self.research_root.exists())
+
+    def _continuity_setup(self):
+        from src.developer import deployment as d, reliability as r
+        source, config, deployed = self._deployment_setup()
+        d.transition_deployment(self.developer, deployed["deployment_id"], "validate", "Continuity prerequisite")
+        plan = r.create_recovery_plan(self.developer, deployed["deployment_id"], "Prepare recovery", "plan-owner")
+        r.verify_recovery(self.developer, plan["plan_id"])
+        return source, config, deployed, plan
+
+    def test_continuity_scenario_types_and_atomic_knowledge_capture(self):
+        from src.developer import continuity as c
+        _, config, deployed, plan = self._continuity_setup()
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for kind in sorted(c.TYPES):
+            scenario = c.create_scenario(self.developer, deployed["deployment_id"], "Prepare disaster", "incident-owner", kind)
+            self.assertEqual(kind, scenario["type"])
+            self.assertEqual("planned", scenario["status"])
+            self.assertEqual("incident-owner", scenario["owner"])
+            inspection = c.disaster_inspect(self.developer, scenario["scenario_id"])
+            record = inspection["continuity"]
+            self.assertEqual(scenario["continuity_id"], record["continuity_id"])
+            self.assertEqual(plan["plan_id"], record["recovery_plan"])
+            self.assertEqual([deployed["deployment_id"]], record["deployment_dependencies"])
+            self.assertEqual([config["config_id"]], record["configuration_dependencies"])
+            self.assertTrue(record["knowledge"]["audit_history"])
+            self.assertTrue(record["knowledge"]["restoration_steps"])
+            self.assertEqual("pending", record["validation_status"])
+        self.assertEqual(4, len(c.continuity_status(self.developer)["continuity"]))
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        scenario["history"].clear()
+        self.assertTrue(c.disaster_inspect(self.developer, scenario["scenario_id"])["scenario"]["history"])
+
+    def test_continuity_lifecycle_attempts_and_no_recovery_execution(self):
+        from src.developer import continuity as c, deployment as d, reliability as r
+        _, _, deployed, plan = self._continuity_setup()
+        identifier = c.create_scenario(self.developer, deployed["deployment_id"], "Plan", "incident-owner")["scenario_id"]
+        directory = self.workspace_path / "optimization" / "continuity"
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        result = c.test_scenario(self.developer, identifier, "Validate preparation", "test-operator")
+        self.assertEqual("validated", result["status"])
+        attempt = result["tests"][0]
+        self.assertEqual("incident-owner", attempt["owner"])
+        self.assertEqual("test-operator", attempt["actor"])
+        self.assertEqual("reference_validation_only", attempt["method"])
+        self.assertTrue(attempt["test_date"])
+        self.assertTrue(attempt["findings"])
+        self.assertTrue(attempt["validation_results"]["warnings"])  # Explicit empty initial rollback.
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertIsNone(d.deployment_status(self.developer)["active_deployment"])
+        self.assertEqual("passed", r.recovery_plan_status(self.developer)["plans"][0]["validation_status"])
+        self.assertTrue(c.disaster_status(self.developer)["scenarios"][0]["evidence_current"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            failed = c.test_scenario(self.developer, identifier, "Approval withdrawn")
+        self.assertEqual("failed", failed["status"])
+        retry = c.test_scenario(self.developer, identifier, "Evidence restored")
+        self.assertEqual(["validated", "failed", "validated"], [a["status"] for a in retry["tests"]])
+        knowledge = c.continuity_status(self.developer)["continuity"][0]
+        self.assertEqual(3, len([h for h in knowledge["history"] if "validation_attempt" in h]))
+        retired = c.transition_scenario(self.developer, identifier, "retired", "End exercise")
+        self.assertEqual("retired", retired["status"])
+        self.assertFalse(c.disaster_status(self.developer)["scenarios"][0]["active"])
+        self.assertFalse(list(directory.glob("*.tmp")))
+
+    def test_continuity_invalid_transitions_ownership_and_plan_links(self):
+        from src.developer import continuity as c, reliability as r
+        _, _, deployed = self._deployment_setup()
+        with self.assertRaisesRegex(LocalWorkflowError, "recovery plan"):
+            c.create_scenario(self.developer, deployed["deployment_id"], "No plan")
+        self.assertFalse((self.workspace_path / "optimization" / "continuity").exists())
+        r.create_recovery_plan(self.developer, deployed["deployment_id"], "Unverified plan")
+        identifier = c.create_scenario(self.developer, deployed["deployment_id"], "Prepare")["scenario_id"]
+        for status in ("planned", "validated", "failed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                c.transition_scenario(self.developer, identifier, status, "Invalid")
+        c.transition_scenario(self.developer, identifier, "testing", "Start validation")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        with self.assertRaisesRegex(LocalWorkflowError, "outcome"):
+            c.transition_scenario(self.developer, identifier, "validated", "Cannot force validation")
+        for kwargs in ({"owner": " "}, {"scenario_type": "unknown"}, {"actor": ""},
+                       {"plan_id": "missing"}, {"restoration_steps": []}, {"restoration_steps": [""]}):
+            with self.assertRaises(LocalWorkflowError):
+                c.create_scenario(self.developer, deployed["deployment_id"], "Invalid", **kwargs)
+        with self.assertRaises(LocalWorkflowError):
+            c.create_scenario(self.developer, deployed["deployment_id"], "")
+        with self.assertRaises(LocalWorkflowError):
+            c.create_scenario(self.developer, "missing", "Unknown deployment")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertEqual("failed", c.test_scenario(self.developer, identifier)["status"])
+        c.transition_scenario(self.developer, identifier, "retired", "End")
+        for status in c.STATES:
+            with self.assertRaises(LocalWorkflowError):
+                c.transition_scenario(self.developer, identifier, status, "Retired is terminal")
+        with self.assertRaises(LocalWorkflowError):
+            c.test_scenario(self.developer, identifier)
+
+    def test_continuity_nonempty_dependencies_and_existing_rollback_compatibility(self):
+        from src.developer import continuity as c, deployment as d, reliability as r, operations as o
+        source, config, first, first_plan = self._continuity_setup()
+        d.transition_deployment(self.developer, first["deployment_id"], "activate", "First rollout")
+        second = self._next_deployment(source)
+        for action in ("validate", "activate"):
+            d.transition_deployment(self.developer, second["deployment_id"], action, "Second rollout")
+        with self.assertRaisesRegex(LocalWorkflowError, "recovery plan"):
+            c.create_scenario(self.developer, second["deployment_id"], "Wrong plan", plan_id=first_plan["plan_id"])
+        plan = r.create_recovery_plan(self.developer, second["deployment_id"], "Second recovery")
+        r.verify_recovery(self.developer, plan["plan_id"])
+        identifier = c.create_scenario(self.developer, second["deployment_id"], "Prepare")["scenario_id"]
+        report = c.disaster_check(self.developer, identifier)
+        self.assertFalse(report["blocked"])
+        self.assertFalse(report["warnings"])
+        self.assertEqual(first["deployment_id"], report["evidence"]["rollback_deployment"]["deployment_id"])
+        record = c.continuity_status(self.developer)["continuity"][0]
+        self.assertEqual([second["config_id"], config["config_id"]], record["configuration_dependencies"])
+        prior = d.deployment_history(self.developer)
+        c.test_scenario(self.developer, identifier)
+        self.assertEqual(prior, d.deployment_history(self.developer))
+        incident = o.create_incident(self.developer, second["deployment_id"], "Actual incident")["operation_id"]
+        self.assertFalse(c.disaster_status(self.developer)["scenarios"][0]["evidence_current"])
+        d.transition_deployment(self.developer, second["deployment_id"], "rollback", "Explicit recovery")
+        audit = d.deployment_audit(self.developer, second["deployment_id"])["events"][-1]
+        o.transition_incident(self.developer, incident, "resolved", "Recovered", recovery_action="Manual rollback",
+                              rollback_reference=audit["event_id"])
+        self.assertEqual("failed", c.test_scenario(self.developer, identifier)["status"])
+        self.assertEqual(first["deployment_id"], d.deployment_status(self.developer)["active_deployment"])
+        self.assertEqual("validated", c.continuity_status(self.developer)["continuity"][0]["history"][2]["status"])
+
+    def test_continuity_missing_dependencies_preserve_knowledge_and_report_blockers(self):
+        from src.developer import continuity as c
+        _, _, deployed, _ = self._continuity_setup()
+        identifier = c.create_scenario(self.developer, deployed["deployment_id"], "Capture history")["scenario_id"]
+        saved = c.continuity_status(self.developer)
+        for folder, check in (("reliability", "recovery_plan"), ("deployments", "deployment_history"),
+                              ("configurations", "configuration_history")):
+            directory = self.workspace_path / "optimization" / folder
+            path = sorted(directory.glob("*.json"))[-1]
+            original = path.read_bytes()
+            path.write_text("{}", encoding="utf-8")
+            before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+            report = c.disaster_check(self.developer, identifier)
+            self.assertIn(check, [b["check"] for b in report["blocked"]])
+            self.assertEqual(saved, c.continuity_status(self.developer))
+            self.assertEqual(saved["continuity"][0], c.disaster_inspect(self.developer, identifier)["continuity"])
+            self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+            path.write_bytes(original)
+        directory = self.workspace_path / "optimization" / "reliability"
+        originals = {p: p.read_bytes() for p in directory.glob("*.json")}
+        for path in originals:
+            path.unlink()
+        self.assertIn("recovery_plan", [b["check"] for b in c.disaster_check(self.developer, identifier)["blocked"]])
+        self.assertEqual("failed", c.test_scenario(self.developer, identifier)["status"])
+        for path, content in originals.items():
+            path.write_bytes(content)
+
+    def test_continuity_ownership_handoff_and_live_governance(self):
+        from src.developer import continuity as c, reliability as r, configuration as config
+        _, conf, deployed, plan = self._continuity_setup()
+        identifier = c.create_scenario(self.developer, deployed["deployment_id"], "Original handoff", "first-owner")["scenario_id"]
+        c.test_scenario(self.developer, identifier)
+        replacement = r.create_recovery_plan(self.developer, deployed["deployment_id"], "New owner", "second-owner")
+        r.verify_recovery(self.developer, replacement["plan_id"])
+        report = c.disaster_check(self.developer, identifier)
+        self.assertIn("recovery_plan", [b["check"] for b in report["blocked"]])
+        original = c.disaster_inspect(self.developer, identifier)
+        self.assertEqual("first-owner", original["continuity"]["owner"])
+        self.assertEqual(plan["plan_id"], original["continuity"]["recovery_plan"])
+        new = c.create_scenario(self.developer, deployed["deployment_id"], "New handoff", "second-owner")
+        self.assertFalse(c.disaster_check(self.developer, new["scenario_id"])["blocked"])
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            self.assertIn("reliability", [b["check"] for b in c.disaster_check(self.developer, new["scenario_id"])["blocked"]])
+        config.transition_configuration(self.developer, conf["config_id"], "retire", "Withdraw configuration")
+        self.assertIn("reliability", [b["check"] for b in c.disaster_check(self.developer, new["scenario_id"])["blocked"]])
+
+    def test_continuity_atomic_publication_interruption_and_corruption(self):
+        from src.developer import continuity as c
+        from copy import deepcopy
+        _, _, deployed, _ = self._continuity_setup()
+        with patch("src.developer.continuity.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaises(LocalWorkflowError):
+                c.create_scenario(self.developer, deployed["deployment_id"], "Attempt create")
+        self.assertEqual([], c._load(self.developer)["scenarios"])
+        self.assertEqual([], c.continuity_status(self.developer)["continuity"])
+        identifier = c.create_scenario(self.developer, deployed["deployment_id"], "Create")["scenario_id"]
+        real_link, calls = c.os.link, []
+        def fail_outcome(source, target):
+            calls.append(target)
+            if len(calls) == 2:
+                raise FileExistsError("Interrupted outcome")
+            return real_link(source, target)
+        with patch("src.developer.continuity.os.link", side_effect=fail_outcome):
+            with self.assertRaises(LocalWorkflowError):
+                c.test_scenario(self.developer, identifier)
+        self.assertEqual("testing", c._load(self.developer)["scenarios"][0]["status"])
+        self.assertEqual([], c._load(self.developer)["scenarios"][0]["tests"])
+        result = c.test_scenario(self.developer, identifier)
+        self.assertEqual(["planned", "testing", "validated"], [h["status"] for h in result["history"]])
+        directory = self.workspace_path / "optimization" / "continuity"
+        self.assertFalse(list(directory.glob("*.tmp")))
+        tail = directory / "00000003.json"
+        original = json.loads(tail.read_text())
+        for key, value in (("previous_digest", "wrong"), ("status", "failed"), ("actor", ""),
+                           ("created_at", "2026-09-30T00:00:00"), ("report", {"passed": [], "warnings": [], "blocked": []})):
+            event = deepcopy(original)
+            event[key] = value
+            tail.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaisesRegex(LocalWorkflowError, "Invalid continuity journal"):
+                c.disaster_check(self.developer, identifier)
+        tail.write_text(json.dumps(original), encoding="utf-8")
+        (directory / "00000001.json").unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "journal chain"):
+            c.continuity_status(self.developer)
+
+    def test_continuity_empty_unknown_and_external_workspace_isolation(self):
+        from src.developer import continuity as c
+        self.assertEqual([], c.disaster_status(self.developer)["scenarios"])
+        self.assertEqual([], c.continuity_status(self.developer)["continuity"])
+        for action in (c.disaster_check, c.disaster_inspect, c.test_scenario):
+            with self.assertRaises(LocalWorkflowError):
+                action(self.developer, "missing")
+        self.assertFalse(self.workspace_path.exists())
+        for root in (local_workflow._PROJECT_ROOT / "disaster-records", self.research_root / "disaster-records"):
+            isolated = DeveloperWorkspace(root, (self.research_root,))
+            for reader in (c.disaster_status, c.continuity_status):
+                with self.assertRaises(LocalWorkflowError):
+                    reader(isolated)
+            with self.assertRaises(LocalWorkflowError):
+                c.create_scenario(isolated, "missing", "Must not write")
+            self.assertFalse(root.exists())
+
+    def test_continuity_cli_read_only_checks_and_simulation_tracking(self):
+        _, _, deployed, plan = self._continuity_setup()
+        def run(command, *args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", command, *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        scenario = run("disaster-create", deployed["deployment_id"], "--reason", "Prepare", "--owner", "on-call",
+                       "--type", "history_loss", "--plan-id", plan["plan_id"], "--step", "Inspect retained audit copies")
+        identifier = scenario["scenario_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        self.assertFalse(run("disaster-check", identifier)["blocked"])
+        self.assertEqual("planned", run("disaster-status")["scenarios"][0]["status"])
+        inspection = run("disaster-inspect", identifier)
+        self.assertEqual(["Inspect retained audit copies"], inspection["continuity"]["knowledge"]["restoration_steps"])
+        self.assertEqual(plan["plan_id"], inspection["recovery_plan"]["plan_id"])
+        self.assertTrue(inspection["audit_history"])
+        self.assertEqual("on-call", run("continuity-status")["continuity"][0]["owner"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        self.assertEqual("validated", run("disaster-test", identifier)["status"])
+        self.assertEqual("retired", run("disaster-retire", identifier, "--reason", "Exercise complete")["status"])
+        self.assertFalse(self.research_root.exists())
+
+    def _deployment_setup(self):
+        from src.developer.configuration import transition_configuration
+        from src.developer.deployment import stage_deployment
+        source, config = self._configuration_setup()
+        transition_configuration(self.developer, config["config_id"], "validate", "Deployment prerequisite")
+        record = stage_deployment(self.developer, config["config_id"], "Stage approved configuration")
+        return source, config, record
+
+    def _next_deployment(self, source):
+        from src.developer.configuration import create_configuration, transition_configuration
+        from src.developer.deployment import stage_deployment
+        config = create_configuration(self.developer, source["promotion_id"], "Next rollout snapshot")
+        transition_configuration(self.developer, config["config_id"], "validate", "Validate next snapshot")
+        return stage_deployment(self.developer, config["config_id"], "Stage next snapshot")
+
+    def test_deployment_creation_staging_validation_and_activation(self):
+        from src.developer.deployment import deployment_status, transition_deployment
+        _, config, record = self._deployment_setup()
+        self.assertEqual("staged", record["stage"])
+        self.assertEqual({}, record["validation"])
+        self.assertEqual(config["config_id"], record["config_id"])
+        self.assertEqual(["planned", "staged"], [h["stage"] for h in record["history"]])
+        self.assertIsNone(deployment_status(self.developer)["active_deployment"])
+        record = transition_deployment(self.developer, record["deployment_id"], "validate", "Check rollout")
+        for field in ("configuration_valid", "policy_check_passed", "rollback_available"):
+            self.assertIs(True, record["validation"][field])
+        self.assertIsNone(record["validation"]["previous_active_configuration"])
+        self.assertEqual(config["source_promotion"], record["validation"]["source_promotion"])
+        transition_deployment(self.developer, record["deployment_id"], "activate", "Explicit activation")
+        self.assertEqual(record["deployment_id"], deployment_status(self.developer)["active_deployment"])
+
+    def test_deployment_invalid_transitions_duplicates_and_attribution(self):
+        from src.developer.deployment import deployment_status, transition_deployment, stage_deployment
+        _, config, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        before = deployment_status(self.developer)
+        for action in ("activate", "resume", "pause", "rollback", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                transition_deployment(self.developer, identifier, action, "Invalid transition")
+        with self.assertRaises(LocalWorkflowError):
+            transition_deployment(self.developer, identifier, "validate", " ")
+        with self.assertRaises(LocalWorkflowError):
+            stage_deployment(self.developer, config["config_id"], "Duplicate")
+        self.assertEqual(before, deployment_status(self.developer))
+        transition_deployment(self.developer, identifier, "retire", "Close unused rollout")
+        with self.assertRaises(LocalWorkflowError):
+            transition_deployment(self.developer, identifier, "validate", "Retired rollout")
+
+    def test_deployment_requires_configuration_validation_and_approval(self):
+        from src.developer.configuration import transition_configuration
+        from src.developer.deployment import stage_deployment, transition_deployment, deployment_status
+        _, config = self._configuration_setup()
+        with self.assertRaisesRegex(LocalWorkflowError, "validated configuration"):
+            stage_deployment(self.developer, config["config_id"], "Draft is not ready")
+        transition_configuration(self.developer, config["config_id"], "validate", "Ready")
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            with self.assertRaisesRegex(LocalWorkflowError, "approved"):
+                stage_deployment(self.developer, config["config_id"], "Missing approval")
+        self.assertFalse((self.workspace_path / "optimization" / "deployments").exists())
+        record = stage_deployment(self.developer, config["config_id"], "Stage")
+        with patch("src.developer.promotion.policy_check", return_value={"blocked": [{"check": "policy"}]}):
+            with self.assertRaises(LocalWorkflowError):
+                transition_deployment(self.developer, record["deployment_id"], "validate", "Blocked policy")
+        transition_deployment(self.developer, record["deployment_id"], "validate", "Valid")
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            with self.assertRaises(LocalWorkflowError):
+                transition_deployment(self.developer, record["deployment_id"], "activate", "Approval lost")
+            self.assertTrue(deployment_status(self.developer)["blocked"])
+        self.assertIsNone(deployment_status(self.developer)["active_deployment"])
+
+    def test_deployment_rollback_preserves_history_and_configuration_journals(self):
+        from src.developer.deployment import deployment_status, transition_deployment
+        source, first_config, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            transition_deployment(self.developer, first["deployment_id"], action, "First rollout")
+        second = self._next_deployment(source)
+        self.assertEqual(first["deployment_id"], second["previous_deployment"])
+        directory = self.workspace_path / "optimization"
+        preserved = {p: p.read_bytes() for p in directory.rglob("*.json")}
+        for action in ("validate", "activate"):
+            second = transition_deployment(self.developer, second["deployment_id"], action, "Second rollout")
+        self.assertEqual(first_config["config_id"], second["validation"]["previous_active_configuration"])
+        with self.assertRaises(LocalWorkflowError):
+            transition_deployment(self.developer, first["deployment_id"], "rollback", "Out of order")
+        transition_deployment(self.developer, second["deployment_id"], "rollback", "Restore first rollout")
+        state = deployment_status(self.developer)
+        self.assertEqual(first["deployment_id"], state["active_deployment"])
+        self.assertEqual(["planned", "staged", "validated", "active", "retired", "active"],
+                         [h["stage"] for h in state["deployments"][0]["history"]])
+        transition_deployment(self.developer, first["deployment_id"], "rollback", "Restore empty reference")
+        self.assertIsNone(deployment_status(self.developer)["active_deployment"])
+        transition_deployment(self.developer, second["deployment_id"], "retire", "Close rolled-back rollout")
+        for path, content in preserved.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_deployment_pause_resume_and_retirement(self):
+        from src.developer.deployment import deployment_status, transition_deployment
+        _, _, record = self._deployment_setup()
+        identifier = record["deployment_id"]
+        for action in ("validate", "activate", "pause"):
+            transition_deployment(self.developer, identifier, action, "Pause lifecycle")
+        state = deployment_status(self.developer)
+        self.assertIsNone(state["active_deployment"])
+        self.assertEqual(identifier, state["selected_deployment"])
+        with self.assertRaises(LocalWorkflowError):
+            transition_deployment(self.developer, identifier, "activate", "Use explicit resume")
+        transition_deployment(self.developer, identifier, "resume", "Recheck and resume")
+        self.assertEqual(identifier, deployment_status(self.developer)["active_deployment"])
+        transition_deployment(self.developer, identifier, "retire", "Close rollout")
+        self.assertIsNone(deployment_status(self.developer)["selected_deployment"])
+
+    def test_deployment_stale_references_and_configuration_changes(self):
+        from src.developer.configuration import transition_configuration
+        from src.developer.deployment import transition_deployment, deployment_status
+        source, config, first = self._deployment_setup()
+        stale = self._next_deployment(source)
+        for record in (first, stale):
+            transition_deployment(self.developer, record["deployment_id"], "validate", "Validate in parallel")
+        transition_deployment(self.developer, first["deployment_id"], "activate", "Select first")
+        with self.assertRaisesRegex(LocalWorkflowError, "reference changed"):
+            transition_deployment(self.developer, stale["deployment_id"], "activate", "Stale reference")
+        fresh = self._next_deployment(source)
+        transition_deployment(self.developer, fresh["deployment_id"], "validate", "Bind configuration reference")
+        transition_configuration(self.developer, config["config_id"], "activate", "Independent configuration change")
+        with self.assertRaisesRegex(LocalWorkflowError, "evidence changed"):
+            transition_deployment(self.developer, fresh["deployment_id"], "activate", "Stale evidence")
+        self.assertEqual(first["deployment_id"], deployment_status(self.developer)["active_deployment"])
+
+    def test_deployment_rollback_rechecks_source_eligibility(self):
+        from src.developer.configuration import transition_configuration
+        from src.developer.deployment import transition_deployment, deployment_status
+        source, config, first = self._deployment_setup()
+        for action in ("validate", "activate"):
+            transition_deployment(self.developer, first["deployment_id"], action, "First rollout")
+        second = self._next_deployment(source)
+        for action in ("validate", "activate"):
+            transition_deployment(self.developer, second["deployment_id"], action, "Second rollout")
+        transition_configuration(self.developer, config["config_id"], "retire", "Withdraw prior configuration")
+        events = deployment_status(self.developer)["events"]
+        with self.assertRaisesRegex(LocalWorkflowError, "validated configuration"):
+            transition_deployment(self.developer, second["deployment_id"], "rollback", "Cannot restore withdrawn config")
+        state = deployment_status(self.developer)
+        self.assertEqual(events, state["events"])
+        self.assertEqual(second["deployment_id"], state["active_deployment"])
+
+    def test_deployment_diff_cli_and_audit_compatibility(self):
+        from src.developer.governance import optimize_audit
+        from src.developer.promotion import promotion_check
+        from src.developer.configuration import transition_configuration
+        _, config = self._configuration_setup()
+        transition_configuration(self.developer, config["config_id"], "validate", "Prerequisite")
+        def cli(*arguments):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(("local", *arguments, "--workspace", str(self.workspace_path), "--json")))
+            return json.loads(output.getvalue())
+        record = cli("deploy-stage", config["config_id"], "--reason", "Stage through CLI")
+        preserved = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")
+                     if "deployments" not in p.parts}
+        identifier = record["deployment_id"]
+        for command in ("deploy-validate", "deploy-activate", "deploy-pause", "deploy-resume"):
+            cli(command, identifier, "--reason", "Explicit rollout action")
+        status = cli("deploy-status")
+        self.assertEqual(identifier, status["active_deployment"])
+        diff = cli("deploy-diff", identifier, identifier)
+        for section in ("configuration", "deployment", "validation", "lifecycle"):
+            self.assertEqual({"added": [], "removed": [], "changed": []}, diff[section])
+        self.assertEqual("clean", optimize_audit(self.developer)["audit_status"])
+        self.assertFalse(promotion_check(self.developer)["blocked"])
+        cli("deploy-rollback", identifier, "--reason", "Rollback through CLI")
+        cli("deploy-retire", identifier, "--reason", "Retire through CLI")
+        for path, content in preserved.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_deployment_comparison_reports_lifecycle_and_validation_changes(self):
+        from src.developer.deployment import transition_deployment, deployment_diff
+        source, _, first = self._deployment_setup()
+        transition_deployment(self.developer, first["deployment_id"], "validate", "Validate first")
+        second = self._next_deployment(source)
+        diff = deployment_diff(self.developer, first["deployment_id"], second["deployment_id"])
+        self.assertTrue(diff["configuration"]["changed"])
+        self.assertTrue(diff["deployment"]["changed"])
+        self.assertTrue(diff["validation"]["removed"])
+        self.assertTrue(diff["lifecycle"]["changed"])
+        with self.assertRaises(LocalWorkflowError):
+            deployment_diff(self.developer, first["deployment_id"], "missing")
+
+    def test_deployment_atomic_publication_corruption_and_isolation(self):
+        from src.developer.deployment import deployment_status, transition_deployment
+        from src.developer.local_workflow import _PROJECT_ROOT
+        self.assertFalse(deployment_status(self.developer)["deployments"])
+        self.assertFalse(self.workspace_path.exists())
+        for root in (_PROJECT_ROOT / "deployment-records", self.research_root / "deployment-records"):
+            with self.assertRaises(LocalWorkflowError):
+                deployment_status(DeveloperWorkspace(root, (self.research_root,)))
+            self.assertFalse(root.exists())
+        _, _, record = self._deployment_setup()
+        before = deployment_status(self.developer)
+        with patch("src.developer.deployment.os.link", side_effect=FileExistsError("Competing writer")):
+            with self.assertRaisesRegex(LocalWorkflowError, "Cannot append"):
+                transition_deployment(self.developer, record["deployment_id"], "validate", "Try write")
+        self.assertEqual(before, deployment_status(self.developer))
+        directory = self.workspace_path / "optimization" / "deployments"
+        self.assertFalse(list(directory.glob("*.tmp")))
+        path = sorted(directory.glob("*.json"))[-1]
+        event = json.loads(path.read_text())
+        event["previous_digest"] = "broken"
+        path.write_text(json.dumps(event))
+        original = path.read_bytes()
+        with self.assertRaisesRegex(LocalWorkflowError, "Invalid deployment journal"):
+            deployment_status(self.developer)
+        self.assertEqual(original, path.read_bytes())
+
+    def test_deployment_partial_staging_can_resume_without_rewriting_plan(self):
+        from src.developer import deployment
+        from src.developer.configuration import transition_configuration
+        _, config = self._configuration_setup()
+        transition_configuration(self.developer, config["config_id"], "validate", "Prerequisite")
+        real_link = deployment.os.link
+        calls = []
+        def fail_staging(source, target):
+            calls.append(target)
+            if len(calls) == 2:
+                raise OSError("Stage publication failed")
+            return real_link(source, target)
+        with patch("src.developer.deployment.os.link", side_effect=fail_staging):
+            with self.assertRaisesRegex(LocalWorkflowError, "Cannot append"):
+                deployment.stage_deployment(self.developer, config["config_id"], "Initial staging attempt")
+        state = deployment.deployment_status(self.developer)
+        self.assertEqual(["planned"], [d["stage"] for d in state["deployments"]])
+        directory = self.workspace_path / "optimization" / "deployments"
+        planned_path = next(directory.glob("*.json"))
+        original = planned_path.read_bytes()
+        record = deployment.stage_deployment(self.developer, config["config_id"], "Retry staging")
+        self.assertEqual("staged", record["stage"])
+        self.assertEqual("deployment-001", record["deployment_id"])
+        self.assertEqual(original, planned_path.read_bytes())
+        self.assertEqual({}, record["validation"])
+
     def test_promotion_creation_transitions_and_append_only_history(self):
         from src.developer.promotion import create_promotion, transition_promotion, active_configuration
         candidate, _ = self._promotion_setup()
@@ -2066,6 +3539,1282 @@ class DeveloperModeTests(unittest.TestCase):
         self.assertEqual(self.repository, workspace_type.return_value.index.call_args.args[0])
         workspace_type.return_value.query.assert_called_once_with("find the session token", Path(self.repository), 4)
         self.assertFalse(self.research_root.exists())
+
+
+    def _governance_setup(self):
+        from src.developer import assurance, recovery_governance as governance
+        _, _, _, scenario = self._assurance_setup()
+        source = assurance.create_assurance(self.developer, scenario["scenario_id"], "Governance baseline")
+        source = assurance.verify_assurance(self.developer, source["assurance_id"])
+        record = governance.register(self.developer, source["assurance_id"], "Register responsibility")
+        return source, record
+
+    def test_recovery_governance_lifecycle_and_append_only_history(self):
+        from src.developer import recovery_governance as g
+        source, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        original = {p: p.read_bytes() for p in g._root(self.developer).glob("*.json")}
+        with self.assertRaises(LocalWorkflowError):
+            g.change(self.developer, identifier, "transition", "Invalid", status="paused")
+        for state in ("active", "paused", "expired", "active", "retired"):
+            record = g.change(self.developer, identifier, "transition", "Explicit transition", status=state)
+        self.assertEqual("retired", record["status"])
+        self.assertEqual(6, len(record["history"]))
+        with self.assertRaises(LocalWorkflowError):
+            g.change(self.developer, identifier, "transition", "Terminal", status="active")
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+        self.assertEqual(source, record["source"])
+
+    def test_recovery_governance_scheduling_expiry_and_no_replay(self):
+        from datetime import timedelta
+        from src.developer import recovery_governance as g
+        source, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        self.assertIn("scheduled_check_overdue", g.review(self.developer, identifier)["findings"])
+        record = g.record_check(self.developer, identifier, identifier, "Capture completed evidence")
+        self.assertEqual(source["evidence"][0]["checked_at"], record["last_check"])
+        self.assertEqual([], g.review(self.developer, identifier)["findings"])
+        with self.assertRaises(LocalWorkflowError):
+            g.record_check(self.developer, identifier, identifier, "Cannot refresh old evidence")
+        due = g.assurance._timestamp(record["next_check"])
+        with patch.object(g, "_now", return_value=due - timedelta(microseconds=1)):
+            self.assertNotIn("scheduled_check_overdue", g.review(self.developer, identifier)["findings"])
+        with patch.object(g, "_now", return_value=due):
+            self.assertIn(identifier, g.check(self.developer)["expired"])
+            self.assertIn("scheduled_check_overdue", g.review(self.developer, identifier)["findings"])
+        self.assertEqual("active", g.history(self.developer, identifier)["record"]["status"])
+        with self.assertRaises(LocalWorkflowError):
+            g.change(self.developer, identifier, "schedule", "Invalid", interval_hours=0)
+        updated = g.change(self.developer, identifier, "schedule", "Shorter interval", interval_hours=1)
+        self.assertEqual((g.assurance._timestamp(record["last_check"]) + timedelta(hours=1)).isoformat(), updated["next_check"])
+
+    def test_recovery_governance_ownership_notes_and_improvements(self):
+        from src.developer import recovery_governance as g
+        _, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        g.record_check(self.developer, identifier, identifier, "Capture")
+        g.change(self.developer, identifier, "assign", "Handoff", owner="maintainer", responsibility="Review rollback references")
+        for kind in ("review", "improvement"):
+            record = g.change(self.developer, identifier, "note", "Manual review", kind=kind, note="Schedule a fresh verification")
+        self.assertEqual("maintainer", record["owner"])
+        self.assertEqual("developer", record["verification_history"][0]["owner"])
+        self.assertIn("ownership_review_due", g.review(self.developer, identifier)["findings"])
+        self.assertEqual(1, len(record["review_notes"]))
+        report = g.improvements(self.developer)["improvements"][0]
+        self.assertEqual(1, len(report["manual_improvement_notes"]))
+        self.assertIn("ownership_review_due", report["current_findings"])
+        with self.assertRaises(LocalWorkflowError):
+            g.change(self.developer, identifier, "assign", "Bad owner", owner=" ", responsibility="Review")
+
+    def test_recovery_governance_fresh_evidence_resolves_recorded_findings(self):
+        from datetime import timedelta
+        from src.developer import assurance, recovery_governance as g
+        source, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        future = assurance._timestamp(source["evidence"][0]["expires_at"]) + timedelta(seconds=1)
+        with patch.object(g, "_now", return_value=future), patch.object(assurance, "_now", return_value=future):
+            record = g.record_check(self.developer, identifier, identifier, "Retain stale check")
+            self.assertTrue(record["verification_history"][-1]["findings"])
+            fresh = assurance.create_assurance(self.developer, record["scenario_id"], "Renew")
+            assurance.verify_assurance(self.developer, fresh["assurance_id"])
+            record = g.record_check(self.developer, identifier, fresh["assurance_id"], "Capture renewal")
+            self.assertEqual([], record["verification_history"][-1]["findings"])
+            report = g.improvements(self.developer)["improvements"][0]
+            self.assertTrue(report["resolved_findings"][-1]["findings"])
+            self.assertEqual([], report["unresolved_findings"])
+        self.assertEqual(2, len(record["verification_history"]))
+        self.assertIn("evidence_changes", record["verification_history"][-1])
+
+    def test_recovery_governance_drift_and_lost_evidence_are_visible(self):
+        from src.developer import assurance, recovery_governance as g
+        _, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        g.record_check(self.developer, identifier, identifier, "Capture")
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            report = g.review(self.developer, identifier)
+            self.assertTrue(report["findings"])
+            self.assertTrue(report["manual_actions"])
+        with patch.object(assurance, "_collect", side_effect=LocalWorkflowError("Missing history")):
+            report = g.review(self.developer, identifier)
+            self.assertEqual(list(assurance.EVIDENCE_TYPES), report["missing_evidence"])
+        assurance.transition_assurance(self.developer, identifier, "expired", "Expire source")
+        self.assertTrue(g.review(self.developer, identifier)["expired"])
+        self.assertEqual(1, len(g.history(self.developer, identifier)["record"]["verification_history"]))
+
+    def test_recovery_governance_rejects_incomplete_wrong_scenario_and_inactive_checks(self):
+        from src.developer import assurance, continuity, recovery_governance as g
+        source, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        with self.assertRaises(LocalWorkflowError):
+            g.record_check(self.developer, identifier, identifier, "Draft cannot verify")
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        pending = assurance.create_assurance(self.developer, record["scenario_id"], "Pending")
+        with self.assertRaises(LocalWorkflowError):
+            g.record_check(self.developer, identifier, pending["assurance_id"], "Incomplete")
+        scenario = continuity.create_scenario(self.developer, source["deployment_id"], "Different scenario")
+        other = assurance.create_assurance(self.developer, scenario["scenario_id"], "Other")
+        assurance.verify_assurance(self.developer, other["assurance_id"])
+        with self.assertRaises(LocalWorkflowError):
+            g.record_check(self.developer, identifier, other["assurance_id"], "Wrong scenario")
+        with self.assertRaises(LocalWorkflowError):
+            g.register(self.developer, identifier, "Duplicate")
+
+    def test_recovery_governance_cli_reports_are_read_only(self):
+        from src.developer import recovery_governance as g
+        _, record = self._governance_setup()
+        identifier = record["assurance_id"]
+        commands = [("assurance-transition", identifier, "active", "--reason", "Start"),
+                    ("assurance-record-check", identifier, "--verification-id", identifier, "--reason", "Capture"),
+                    ("assurance-assign", identifier, "--owner", "reviewer", "--responsibility", "Maintain evidence", "--reason", "Handoff"),
+                    ("assurance-schedule", identifier, "--every-hours", "2", "--reason", "Schedule"),
+                    ("assurance-note", identifier, "--kind", "improvement", "--note", "Verify again", "--reason", "Review")]
+        for command in commands:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(0, main(["local", *command, "--workspace", str(self.workspace_path)]))
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("assurance-status", "assurance-history", "assurance-review", "assurance-check", "assurance-improvements"):
+            args = ["local", command]
+            if command in {"assurance-history", "assurance-review"}:
+                args.append(identifier)
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main([*args, "--workspace", str(self.workspace_path), "--json"]))
+            self.assertEqual(g.MODE, json.loads(output.getvalue())["mode"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+
+    def test_recovery_governance_cli_registration_and_evidence_changes(self):
+        from src.developer import assurance, continuity, recovery_governance as g
+        _, _, _, scenario = self._assurance_setup()
+        source = assurance.create_assurance(self.developer, scenario["scenario_id"], "Initial verification")
+        assurance.verify_assurance(self.developer, source["assurance_id"])
+        identifier = source["assurance_id"]
+        with redirect_stdout(StringIO()):
+            self.assertEqual(0, main(["local", "assurance-register", identifier,
+                "--owner", "operator", "--responsibility", "Review evidence", "--every-hours", "24",
+                "--reason", "Register", "--workspace", str(self.workspace_path)]))
+        g.change(self.developer, identifier, "transition", "Start", status="active")
+        g.change(self.developer, identifier, "assign", "Handoff before recording", owner="new-owner", responsibility="Review evidence")
+        g.record_check(self.developer, identifier, identifier, "Old source does not acknowledge handoff")
+        self.assertIn("ownership_review_due", g.review(self.developer, identifier)["findings"])
+        continuity.test_scenario(self.developer, scenario["scenario_id"])
+        fresh = assurance.create_assurance(self.developer, scenario["scenario_id"], "Changed simulation history")
+        assurance.verify_assurance(self.developer, fresh["assurance_id"])
+        record = g.record_check(self.developer, identifier, fresh["assurance_id"], "Capture changed evidence")
+        self.assertNotIn("ownership_review_due", g.review(self.developer, identifier)["findings"])
+        self.assertTrue(record["verification_history"][-1]["evidence_changes"]["changed"])
+        self.assertEqual(identifier, record["verification_history"][0]["source"]["assurance_id"])
+
+    def test_recovery_governance_corruption_atomic_failure_and_isolation(self):
+        from src.developer import recovery_governance as g
+        self.assertEqual([], g.check(self.developer)["passed"])
+        self.assertFalse(g._root(self.developer).exists())
+        with self.assertRaises(LocalWorkflowError):
+            g.history(self.developer, "unknown")
+        _, record = self._governance_setup()
+        path = next(g._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        with patch.object(g.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                g.change(self.developer, record["assurance_id"], "transition", "Start", status="active")
+        self.assertEqual(original, path.read_bytes())
+        self.assertFalse(list(g._root(self.developer).glob("*.tmp")))
+        event = json.loads(original)
+        event["sequence"] = 2
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            g.status(self.developer)
+        path.write_bytes(original)
+        self.assertEqual("draft", g.history(self.developer, record["assurance_id"])["record"]["status"])
+        with self.assertRaises(LocalWorkflowError):
+            g.check(DeveloperWorkspace(self.research_root / "governance", research_roots=[self.research_root]))
+
+
+    def _assurance_operations_setup(self, verified=False):
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, record = self._governance_setup()
+        if verified:
+            g.change(self.developer, record["assurance_id"], "transition", "Start", status="active")
+            g.record_check(self.developer, record["assurance_id"], source["assurance_id"], "Capture evidence")
+        operation = ops.create(self.developer, record["assurance_id"], "Start operations", owner="operator")
+        return source, operation
+
+    def test_assurance_operations_lifecycle_and_preserved_history(self):
+        from src.developer import assurance_operations as ops
+        _, operation = self._assurance_operations_setup()
+        identifier = operation["operation_id"]
+        original = {p: p.read_bytes() for p in ops._root(self.developer).glob("*.json")}
+        with self.assertRaises(LocalWorkflowError):
+            ops.change(self.developer, identifier, "transition", "Cannot skip review", status="closed")
+        ops.change(self.developer, identifier, "transition", "Begin", status="reviewing")
+        with self.assertRaises(LocalWorkflowError):
+            ops.change(self.developer, identifier, "transition", "Must record review", status="accepted")
+        reviewed = ops.record_review(self.developer, identifier, "Inspect current findings")
+        self.assertEqual("reviewing", reviewed["status"])
+        self.assertIsNotNone(reviewed["last_reviewed"])
+        with self.assertRaises(LocalWorkflowError):
+            ops.change(self.developer, identifier, "transition", "Unresolved findings", status="improved")
+        ops.change(self.developer, identifier, "transition", "Explicitly accept current findings", status="accepted")
+        closed = ops.change(self.developer, identifier, "transition", "Close accepted operation", status="closed")
+        self.assertTrue(ops.findings(self.developer)["active"])
+        with self.assertRaises(LocalWorkflowError):
+            ops.record_review(self.developer, identifier, "Closed cannot change")
+        self.assertEqual(5, len(closed["history"]))
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_assurance_operations_repeated_findings_resolution_and_reopening(self):
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, operation = self._assurance_operations_setup()
+        identifier, anchor = operation["operation_id"], source["assurance_id"]
+        ops.record_review(self.developer, identifier, "First observation")
+        ops.record_review(self.developer, identifier, "Repeated observation")
+        report = ops.findings(self.developer)
+        self.assertTrue(report["recurring"])
+        self.assertEqual({"warning", "info"}, {f["severity"] for f in report["active"]})
+        for finding in report["active"]:
+            self.assertEqual(anchor, finding["assurance_id"])
+            self.assertEqual([identifier], finding["related_operations"])
+            self.assertLessEqual(finding["first_seen"], finding["last_seen"])
+        g.change(self.developer, anchor, "transition", "Start", status="active")
+        g.record_check(self.developer, anchor, anchor, "Record verified evidence")
+        # Read-only reporting cannot resolve the recorded findings.
+        self.assertEqual([], ops.review_cycle(self.developer, anchor)["current_findings"])
+        self.assertTrue(ops.findings(self.developer)["active"])
+        ops.record_review(self.developer, identifier, "Confirm resolution")
+        self.assertEqual([], ops.findings(self.developer)["active"])
+        self.assertTrue(ops.findings(self.developer)["resolved"])
+        ops.change(self.developer, identifier, "transition", "Confirmed improvement", status="improved")
+        g.change(self.developer, anchor, "assign", "Missing refreshed ownership verification", owner="next", responsibility="Review evidence")
+        ops.record_review(self.developer, identifier, "New handoff finding")
+        self.assertIn("ownership_review_due", [f["key"] for f in ops.findings(self.developer)["active"]])
+        # The original draft lifecycle finding recurs in a separate scenario observation.
+        g.change(self.developer, anchor, "transition", "Pause", status="paused")
+        ops.record_review(self.developer, identifier, "Paused observation")
+        g.change(self.developer, anchor, "transition", "Resume", status="active")
+        ops.record_review(self.developer, identifier, "Resolve paused lifecycle")
+        g.change(self.developer, anchor, "transition", "Pause again", status="paused")
+        reviewed = ops.record_review(self.developer, identifier, "Reopened lifecycle finding")
+        self.assertIn(anchor + ":lifecycle:paused", reviewed["reviews"][-1]["reopened_findings"])
+
+    def test_assurance_operations_shared_findings_and_manual_notes(self):
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, first = self._assurance_operations_setup()
+        ops.record_review(self.developer, first["operation_id"], "First cycle")
+        second = ops.create(self.developer, source["assurance_id"], "Follow-up cycle", owner="next-operator")
+        ops.record_review(self.developer, second["operation_id"], "Repeated unresolved findings")
+        for finding in ops.findings(self.developer)["active"]:
+            self.assertEqual([first["operation_id"], second["operation_id"]], finding["related_operations"])
+        ops.change(self.developer, second["operation_id"], "assign", "Operations handoff", owner="reviewer")
+        ops.change(self.developer, second["operation_id"], "note", "Manual action", note="Plan evidence renewal")
+        self.assertEqual("developer", g.history(self.developer, source["assurance_id"])["record"]["owner"])
+        legacy = g.improvements(self.developer)
+        report = ops.improvements(self.developer)
+        self.assertEqual(legacy, {k: report[k] for k in legacy})
+        self.assertTrue(report["operations"]["repeated_findings"][-1]["findings"])
+        self.assertEqual("Plan evidence renewal", report["operations"]["improvement_notes"][0]["note"])
+        cycle = ops.review_cycle(self.developer, source["assurance_id"])
+        self.assertEqual(2, len(cycle["previous_reviews"]))
+        self.assertTrue(cycle["pending_actions"])
+        self.assertEqual(second["operation_id"], cycle["improvement_history"][0]["operation_id"])
+
+    def test_assurance_operations_coverage_includes_ungoverned_and_unverified_scenarios(self):
+        from src.developer import assurance, assurance_operations as ops, continuity, recovery_governance as g
+        _, deployed, _, scenario = self._assurance_setup()
+        empty = ops.coverage(self.developer)
+        self.assertEqual([{"assurance_id": None, "scenario_id": scenario["scenario_id"]}], empty["missing_owner"])
+        self.assertTrue(empty["missing_schedule"])
+        self.assertEqual([], empty["covered"])
+        source = assurance.create_assurance(self.developer, scenario["scenario_id"], "Ungoverned assurance")
+        assurance.verify_assurance(self.developer, source["assurance_id"])
+        ungoverned = ops.coverage(self.developer)
+        self.assertEqual(source["assurance_id"], ungoverned["missing_owner"][0]["assurance_id"])
+        self.assertIn(scenario["scenario_id"], ungoverned["verified_scenarios"])
+        g.register(self.developer, source["assurance_id"], "Register")
+        g.change(self.developer, source["assurance_id"], "transition", "Start", status="active")
+        g.record_check(self.developer, source["assurance_id"], source["assurance_id"], "Record verification")
+        covered = ops.coverage(self.developer)
+        self.assertEqual(1, len(covered["covered"]))
+        self.assertEqual([], covered["missing_owner"])
+        other = continuity.create_scenario(self.developer, deployed["deployment_id"], "Scenario without assurance")
+        mixed = ops.coverage(self.developer)
+        self.assertEqual(1, len(mixed["covered"]))
+        self.assertEqual(other["scenario_id"], mixed["uncovered"][0]["scenario_id"])
+        fresh = assurance.create_assurance(self.developer, scenario["scenario_id"], "Renewal")
+        assurance.verify_assurance(self.developer, fresh["assurance_id"])
+        g.record_check(self.developer, source["assurance_id"], fresh["assurance_id"], "Renewal linked to governance")
+        self.assertFalse(any(row["assurance_id"] == fresh["assurance_id"] for row in ops.coverage(self.developer)["uncovered"]))
+
+    def test_assurance_operations_expiry_missing_references_and_stale_improvement(self):
+        from datetime import timedelta
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, operation = self._assurance_operations_setup(verified=True)
+        identifier = operation["operation_id"]
+        ops.record_review(self.developer, identifier, "Clean review")
+        due = g.assurance._timestamp(source["evidence"][0]["expires_at"]) + timedelta(seconds=1)
+        with patch.object(g, "_now", return_value=due):
+            report = ops.coverage(self.developer)
+            self.assertTrue(report["expired"])
+            self.assertEqual([], report["covered"])
+            with self.assertRaises(LocalWorkflowError):
+                ops.change(self.developer, identifier, "transition", "Old clean review is stale", status="improved")
+        with patch("src.developer.promotion._all_reviews", return_value=[]):
+            report = ops.coverage(self.developer)
+            self.assertTrue(report["missing_recovery_references"])
+            self.assertEqual([], report["verified_scenarios"])
+
+    def test_assurance_operations_missing_history_preserves_findings(self):
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, operation = self._assurance_operations_setup()
+        ops.record_review(self.developer, operation["operation_id"], "Capture findings")
+        original = ops.findings(self.developer)["active"]
+        with patch.object(g, "review", side_effect=LocalWorkflowError("Missing governance history")):
+            cycle = ops.review_cycle(self.developer, source["assurance_id"])
+            self.assertIn("assurance_history_unavailable", cycle["current_findings"])
+            self.assertTrue(cycle["previous_reviews"])
+            with self.assertRaises(LocalWorkflowError):
+                ops.record_review(self.developer, operation["operation_id"], "Unavailable history")
+        self.assertEqual(original, ops.findings(self.developer)["active"])
+        incomplete = g.review(self.developer, source["assurance_id"])
+        incomplete["findings"] = ["recovery_history_unavailable"]
+        with patch.object(g, "review", return_value=incomplete):
+            ops.record_review(self.developer, operation["operation_id"], "Incomplete review cannot resolve old findings")
+        self.assertTrue(set(f["finding_id"] for f in original).issubset({f["finding_id"] for f in ops.findings(self.developer)["active"]}))
+        with patch.object(g, "_load", side_effect=LocalWorkflowError("Unreadable governance")):
+            report = ops.coverage(self.developer)
+            self.assertTrue(report["diagnostics"])
+            self.assertEqual([], report["covered"])
+
+    def test_assurance_operations_cli_reports_and_prior_journals_unchanged(self):
+        from src.developer import assurance_operations as ops, recovery_governance as g
+        source, _ = self._governance_setup()
+        anchor = source["assurance_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        commands = [("assurance-operation-create", anchor, "--owner", "operator"),
+                    ("assurance-operation-review", "operation-001"),
+                    ("assurance-operation-assign", "operation-001", "--owner", "reviewer"),
+                    ("assurance-operation-note", "operation-001", "--note", "Manual improvement"),
+                    ("assurance-operation-transition", "operation-001", "accepted")]
+        for command in commands:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(0, main(["local", *command, "--reason", "Explicit operation", "--workspace", str(self.workspace_path)]))
+        for path, content in before.items():
+            self.assertEqual(content, path.read_bytes())
+        all_files = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("assurance-operations", "assurance-findings", "assurance-review-cycle", "assurance-coverage", "assurance-improvements"):
+            args = ["local", command] + ([anchor] if command == "assurance-review-cycle" else [])
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main([*args, "--workspace", str(self.workspace_path), "--json"]))
+            self.assertEqual(g.MODE if command == "assurance-improvements" else ops.MODE, json.loads(output.getvalue())["mode"])
+        self.assertEqual(all_files, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+
+    def test_assurance_operations_corruption_atomic_failure_and_isolation(self):
+        from src.developer import assurance_operations as ops
+        self.assertEqual([], ops.operations(self.developer)["operations"])
+        self.assertEqual([], ops.coverage(self.developer)["covered"])
+        self.assertFalse(ops._root(self.developer).exists())
+        with self.assertRaises(LocalWorkflowError):
+            ops.create(self.developer, "unknown", "Unknown assurance")
+        with self.assertRaises(LocalWorkflowError):
+            ops.review_cycle(self.developer, "unknown")
+        _, operation = self._assurance_operations_setup()
+        path = next(ops._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        with patch.object(ops.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                ops.record_review(self.developer, operation["operation_id"], "Atomic failure")
+        self.assertEqual(original, path.read_bytes())
+        self.assertEqual([], ops.findings(self.developer)["active"])
+        self.assertFalse(list(ops._root(self.developer).glob("*.tmp")))
+        event = json.loads(original)
+        event["owner"] = " "
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            ops.operations(self.developer)
+        path.write_bytes(original)
+        with self.assertRaises(LocalWorkflowError):
+            ops.change(self.developer, operation["operation_id"], "assign", "Invalid owner", owner=" ")
+        with self.assertRaises(LocalWorkflowError):
+            ops.coverage(DeveloperWorkspace(self.research_root / "operations", research_roots=[self.research_root]))
+
+    def test_assurance_operations_improvement_keeps_verification_links_and_closes(self):
+        from src.developer import assurance_operations as ops
+        source, operation = self._assurance_operations_setup(verified=True)
+        identifier = operation["operation_id"]
+        ops.record_review(self.developer, identifier, "Clean evidence")
+        improved = ops.change(self.developer, identifier, "transition", "Verified improvement", status="improved")
+        self.assertEqual("improved", improved["status"])
+        ops.change(self.developer, identifier, "transition", "Close reviewed improvement", status="closed")
+        report = ops.improvements(self.developer)
+        linked = report["operations"]["linked_verification_history"][0]["verification_history"]
+        self.assertEqual(source["assurance_id"], linked[0]["verification_id"])
+        self.assertEqual([], ops.operations(self.developer)["active"])
+        self.assertEqual(1, len(ops.operations(self.developer)["operations"]))
+
+
+    def _maturity_setup(self):
+        from src.developer import assurance_operations as ops, maturity
+        source, operation = self._assurance_operations_setup(verified=True)
+        ops.record_review(self.developer, operation["operation_id"], "Current reviewed evidence")
+        record = maturity.create(self.developer, "recovery-verification", [source["assurance_id"]], "maintainer", "Define assurance area")
+        return source, operation, record
+
+    def test_maturity_lifecycle_requires_assessments_and_preserves_history(self):
+        from src.developer import maturity as m
+        _, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        original = {p: p.read_bytes() for p in m._root(self.developer).glob("*.json")}
+        with self.assertRaises(LocalWorkflowError):
+            m.transition(self.developer, identifier, "defined", "Missing assessment")
+        for index, capability in enumerate(m.CAPABILITIES):
+            if capability == m.CAPABILITIES[3]:
+                planned = m.add_plan(self.developer, identifier, ["Retain recurring verification reviews"], [capability], [], "Plan improvement")
+                m.review_plan(self.developer, identifier, planned["plans"][-1]["plan_id"], "reviewed", "Manual plan review", "Review")
+            m.assess(self.developer, identifier, capability, "Assess capability")
+            before = m.history(self.developer, identifier)["record"]["level"]
+            m.readiness(self.developer)
+            self.assertEqual(before, m.history(self.developer, identifier)["record"]["level"])
+            record = m.transition(self.developer, identifier, m.LEVELS[index + 1], "Explicit evidence-backed promotion")
+        self.assertEqual("improving", record["level"])
+        self.assertEqual(1, len(m.readiness(self.developer)["ready"]))
+        self.assertEqual(["initial", "defined", "managed", "measured"], [a["level"] for a in record["assessments"]])
+        self.assertEqual("measured", m.transition(self.developer, identifier, "measured", "Manual reassessment downgrade")["level"])
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_maturity_invalid_transitions_scopes_and_manual_gaps(self):
+        from src.developer import maturity as m
+        source, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        for level in ("initial", "managed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                m.transition(self.developer, identifier, level, "Invalid transition")
+        with self.assertRaises(LocalWorkflowError):
+            m.create(self.developer, "recovery-verification", [source["assurance_id"]], "owner", "Duplicate area")
+        with self.assertRaises(LocalWorkflowError):
+            m.create(self.developer, "empty", [], "owner", "Empty scope")
+        with self.assertRaises(LocalWorkflowError):
+            m.create(self.developer, "unknown", ["assurance-unknown"], "owner", "Unknown scope")
+        with self.assertRaises(LocalWorkflowError):
+            m.assess(self.developer, identifier, "unknown-capability", "Invalid")
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "Document manual gap", gaps=["Handoff instructions need review"], improvement_notes=["Arrange a review"])
+        with self.assertRaises(LocalWorkflowError):
+            m.transition(self.developer, identifier, "defined", "Cannot ignore manual gap")
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "Manual gap reviewed and cleared")
+        self.assertEqual("defined", m.transition(self.developer, identifier, "defined", "Ready")["level"])
+        self.assertEqual(["Handoff instructions need review"], m.history(self.developer, identifier)["record"]["assessments"][0]["gaps"])
+
+    def test_maturity_owner_handoff_requires_reassessment(self):
+        from src.developer import maturity as m, recovery_governance as g
+        source, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "Assess owner")
+        m.assign(self.developer, identifier, "new-maintainer", "Maturity ownership handoff")
+        review = m.review(self.developer, record["assurance_area"])
+        self.assertIn("ownership_reassessment_required", review["capabilities"][0]["gaps"])
+        with self.assertRaises(LocalWorkflowError):
+            m.transition(self.developer, identifier, "defined", "Old owner assessment")
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "New owner confirms scope")
+        m.transition(self.developer, identifier, "defined", "Confirmed")
+        self.assertEqual("developer", g.history(self.developer, source["assurance_id"])["record"]["owner"])
+        with self.assertRaises(LocalWorkflowError):
+            m.assign(self.developer, identifier, " ", "Invalid attribution")
+
+    def test_maturity_stale_evidence_blocks_promotion_and_records_differences(self):
+        from datetime import timedelta
+        from src.developer import maturity as m, recovery_governance as g
+        source, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "Owner")
+        m.transition(self.developer, identifier, "defined", "Defined")
+        original = m.assess(self.developer, identifier, m.CAPABILITIES[1], "Current verification")["assessments"][-1]
+        future = g.assurance._timestamp(source["evidence"][0]["expires_at"]) + timedelta(seconds=1)
+        with patch.object(g, "_now", return_value=future):
+            report = m.review(self.developer, record["assurance_area"])
+            self.assertIn("assessment_stale", report["capabilities"][1]["gaps"])
+            with self.assertRaises(LocalWorkflowError):
+                m.transition(self.developer, identifier, "managed", "Stale evidence")
+            changed = m.assess(self.developer, identifier, m.CAPABILITIES[1], "Retain expiry finding")
+            self.assertTrue(changed["assessments"][-1]["evidence_changes"]["changed"])
+            self.assertTrue(m.readiness(self.developer)["needs_attention"])
+        self.assertEqual(original, changed["assessments"][-2])
+        self.assertEqual("defined", changed["level"])
+
+    def test_maturity_plans_preserve_revisions_and_manual_reviews(self):
+        from src.developer import maturity as m
+        _, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        record = m.add_plan(self.developer, identifier, ["Review retained evidence"], [m.CAPABILITIES[1]], [], "Initial plan")
+        first = record["plans"][0]
+        with self.assertRaises(LocalWorkflowError):
+            m.review_plan(self.developer, identifier, first["plan_id"], "completed", "Skip review", "Invalid")
+        m.review_plan(self.developer, identifier, first["plan_id"], "reviewed", "Evidence inspected", "Manual review")
+        record = m.review_plan(self.developer, identifier, first["plan_id"], "completed", "Review activity complete", "Manual completion")
+        completed = record["plans"][0]
+        with self.assertRaises(LocalWorkflowError):
+            m.review_plan(self.developer, identifier, first["plan_id"], "reviewed", "Cannot rewrite", "Invalid")
+        record = m.add_plan(self.developer, identifier, ["Expand review instructions"], [m.CAPABILITIES[2]], [], "Next plan version", supersedes=first["plan_id"])
+        self.assertEqual(completed, record["plans"][0])
+        self.assertEqual(first["plan_id"], record["plans"][1]["supersedes"])
+        self.assertEqual(2, len(completed["review_history"]))
+        self.assertEqual(2, len(m.plans(self.developer)["plans"]))
+        self.assertIn("manually_reviewed_plan_missing", m.review(self.developer, record["assurance_area"])["capabilities"][3]["gaps"])
+
+    def test_maturity_finding_links_require_scope_and_confirmed_resolution(self):
+        from src.developer import assurance_operations as ops, maturity as m, recovery_governance as g
+        source, operation = self._assurance_operations_setup()
+        ops.record_review(self.developer, operation["operation_id"], "Capture unresolved findings")
+        finding = ops.findings(self.developer)["active"][0]
+        record = m.create(self.developer, "finding-management", [source["assurance_id"]], "maintainer", "Area")
+        identifier = record["maturity_id"]
+        with self.assertRaises(LocalWorkflowError):
+            m.add_plan(self.developer, identifier, ["Repair"], [m.CAPABILITIES[1]], ["unrelated-finding"], "Invalid reference")
+        planned = m.add_plan(self.developer, identifier, ["Activate and verify assurance"], [m.CAPABILITIES[1], m.CAPABILITIES[2]], [finding["finding_id"]], "Linked improvement")
+        plan_id = planned["plans"][0]["plan_id"]
+        m.review_plan(self.developer, identifier, plan_id, "reviewed", "Review pending work", "Manual")
+        with self.assertRaises(LocalWorkflowError):
+            m.review_plan(self.developer, identifier, plan_id, "completed", "Still unresolved", "Invalid")
+        g.change(self.developer, source["assurance_id"], "transition", "Activate", status="active")
+        g.record_check(self.developer, source["assurance_id"], source["assurance_id"], "Record evidence")
+        with self.assertRaises(LocalWorkflowError):
+            m.review_plan(self.developer, identifier, plan_id, "completed", "Operations review is still old", "Invalid")
+        ops.record_review(self.developer, operation["operation_id"], "Confirm findings resolved")
+        before = ops.findings(self.developer)
+        completed = m.review_plan(self.developer, identifier, plan_id, "completed", "Resolution reviewed", "Complete")
+        self.assertEqual("completed", completed["plans"][0]["status"])
+        self.assertEqual("open", completed["plans"][0]["finding_snapshots"][0]["status"])
+        self.assertEqual(before, ops.findings(self.developer))
+
+    def test_maturity_missing_source_history_retains_assessments(self):
+        from src.developer import maturity as m, recovery_governance as g
+        _, _, record = self._maturity_setup()
+        identifier = record["maturity_id"]
+        m.assess(self.developer, identifier, m.CAPABILITIES[0], "Retain source evidence")
+        original = m.history(self.developer, identifier)
+        with patch.object(g, "review", side_effect=LocalWorkflowError("Governance history unavailable")):
+            review = m.review(self.developer, record["assurance_area"])
+            self.assertTrue(review["missing_evidence"])
+            self.assertEqual([], m.readiness(self.developer)["ready"])
+            with self.assertRaises(LocalWorkflowError):
+                m.transition(self.developer, identifier, "defined", "Unavailable source")
+        self.assertEqual(original, m.history(self.developer, identifier))
+
+    def test_maturity_cli_reports_read_only_and_prior_journals_unchanged(self):
+        from src.developer import assurance_operations as ops, maturity as m
+        source, operation = self._assurance_operations_setup(verified=True)
+        ops.record_review(self.developer, operation["operation_id"], "Current review")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        commands = [("maturity-create", "recovery-verification", "--assurance-id", source["assurance_id"], "--owner", "maintainer"),
+                    ("maturity-assess", "maturity-001", m.CAPABILITIES[0], "--note", "Owner confirmed"),
+                    ("maturity-transition", "maturity-001", "defined"),
+                    ("maturity-assign", "maturity-001", "--owner", "next-maintainer"),
+                    ("maturity-plan-add", "maturity-001", "--improvement", "Review evidence", "--capability", m.CAPABILITIES[1]),
+                    ("maturity-plan-review", "maturity-001", "maturity-001-plan-001", "reviewed", "--note", "Manual review")]
+        for command in commands:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(0, main(["local", *command, "--reason", "Explicit maturity action", "--workspace", str(self.workspace_path)]))
+        for path, content in before.items():
+            self.assertEqual(content, path.read_bytes())
+        all_files = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("maturity-status", "maturity-history", "maturity-review", "maturity-readiness", "maturity-plan"):
+            args = ["local", command]
+            if command == "maturity-history":
+                args.append("maturity-001")
+            elif command == "maturity-review":
+                args.append("recovery-verification")
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main([*args, "--workspace", str(self.workspace_path), "--json"]))
+            self.assertEqual(m.MODE, json.loads(output.getvalue())["mode"])
+        self.assertEqual(all_files, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+
+    def test_maturity_atomic_publication_corruption_and_isolation(self):
+        from src.developer import maturity as m
+        self.assertEqual([], m.readiness(self.developer)["ready"])
+        self.assertFalse(m._root(self.developer).exists())
+        with self.assertRaises(LocalWorkflowError):
+            m.history(self.developer, "unknown")
+        with self.assertRaises(LocalWorkflowError):
+            m.review(self.developer, "unknown")
+        _, _, record = self._maturity_setup()
+        original = m.history(self.developer, record["maturity_id"])
+        with patch.object(m.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                m.assess(self.developer, record["maturity_id"], m.CAPABILITIES[0], "Interrupted publication")
+        self.assertEqual(original, m.history(self.developer, record["maturity_id"]))
+        self.assertFalse(list(m._root(self.developer).glob("*.tmp")))
+        path = next(m._root(self.developer).glob("*.json"))
+        content = path.read_bytes()
+        event = json.loads(content)
+        event["sequence"] = 2
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            m.status(self.developer)
+        path.write_bytes(content)
+        with self.assertRaises(LocalWorkflowError):
+            m.readiness(DeveloperWorkspace(self.research_root / "maturity", research_roots=[self.research_root]))
+
+
+    def _evolution_setup(self, capability=None):
+        from src.developer import evolution as e, maturity as m
+        source, operation, mature = self._maturity_setup()
+        capability = capability or m.CAPABILITIES[0]
+        m.assess(self.developer, mature["maturity_id"], capability, "Assess source capability")
+        record = e.create(self.developer, "recovery-verification", "improvement", "maintainer", "Plan evolution")
+        e.record_impact(self.developer, record["evolution_id"], [capability], [mature["maturity_id"]], [],
+                        ["Scope reviewed"], [], "Capture source evidence")
+        return source, operation, mature, record
+
+    def test_evolution_lifecycle_and_append_only_decisions(self):
+        from src.developer import evolution as e, maturity as m
+        _, _, mature, record = self._evolution_setup()
+        identifier = record["evolution_id"]
+        original = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        before = m.readiness(self.developer)
+        for state in ("reviewing", "approved", "implemented", "verified", "retired"):
+            record = e.transition(self.developer, identifier, state, "Manual decision", "Reviewed change")
+            self.assertEqual(state, record["status"])
+        self.assertEqual(["planned", "planned", "reviewing", "approved", "implemented", "verified", "retired"],
+                         [h["status"] for h in record["history"]])
+        self.assertEqual(1, len(e.status(self.developer)["retired"]))
+        self.assertEqual(before, m.readiness(self.developer))
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+        self.assertEqual("initial", m.history(self.developer, mature["maturity_id"])["record"]["level"])
+
+    def test_evolution_invalid_transitions_and_terminal_records_do_not_write(self):
+        from src.developer import evolution as e
+        record = e.create(self.developer, "recovery-verification", "improvement", "owner", "Plan")
+        identifier = record["evolution_id"]
+        for state in ("planned", "approved", "implemented", "verified", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                e.transition(self.developer, identifier, state, "Decision", "Invalid")
+        self.assertEqual(record, e.history(self.developer, identifier)["record"])
+        e.transition(self.developer, identifier, "reviewing", "Manual review", "Review")
+        with self.assertRaises(LocalWorkflowError):
+            e.transition(self.developer, identifier, "approved", "Decision", "Missing evidence")
+        self.assertIn("impact_missing", e.review(self.developer, identifier)["missing_evidence"])
+        e.transition(self.developer, identifier, "retired", "Withdraw", "Retire")
+        retired = e.history(self.developer, identifier)
+        with self.assertRaises(LocalWorkflowError):
+            e.add_plan(self.developer, identifier, ["Improve"], [], ["Review"], "owner", "Invalid")
+        with self.assertRaises(LocalWorkflowError):
+            e.transition(self.developer, identifier, "planned", "Reopen", "Invalid")
+        self.assertEqual(retired, e.history(self.developer, identifier))
+
+    def test_evolution_impact_scope_risks_and_revision_history(self):
+        from src.developer import evolution as e, maturity as m
+        _, _, mature, record = self._evolution_setup()
+        identifier, mid = record["evolution_id"], mature["maturity_id"]
+        original = e.impact(self.developer, identifier)["current"]
+        for capabilities, mids, findings in ((["unknown"], [mid], []), ([], [mid], []),
+                                             ([m.CAPABILITIES[0]], ["missing"], []),
+                                             ([m.CAPABILITIES[0]], [mid], ["missing"])):
+            with self.assertRaises(LocalWorkflowError):
+                e.record_impact(self.developer, identifier, capabilities, mids, findings, [], [], "Invalid scope")
+        e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [], ["Needs review"], ["Owner risk"], "Risk update")
+        e.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        self.assertEqual(["Owner risk"], e.review(self.developer, identifier)["warnings"])
+        with self.assertRaises(LocalWorkflowError):
+            e.transition(self.developer, identifier, "approved", "Approve", "Unresolved risk")
+        e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [], ["Risk resolved manually"], [], "Refresh")
+        self.assertEqual(["manual_approval"], e.review(self.developer, identifier)["ready"])
+        self.assertEqual(original, e.impact(self.developer, identifier)["impact_history"][0])
+        e.transition(self.developer, identifier, "approved", "Approve", "Decision")
+        with self.assertRaises(LocalWorkflowError):
+            e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [], [], [], "Cannot silently alter approval")
+
+    def test_evolution_stale_maturity_blocks_verification_until_refresh(self):
+        from src.developer import evolution as e, maturity as m
+        _, _, mature, record = self._evolution_setup()
+        identifier, mid = record["evolution_id"], mature["maturity_id"]
+        for state in ("reviewing", "approved", "implemented"):
+            e.transition(self.developer, identifier, state, "Decision", "Manual action")
+        with self.assertRaises(LocalWorkflowError):
+            e.record_impact(self.developer, identifier, [m.CAPABILITIES[1]], [mid], [], [], [], "Changed implemented scope")
+        m.assign(self.developer, mid, "new-owner", "Handoff")
+        report = e.review(self.developer, identifier)
+        self.assertIn("impact_evidence_stale", report["missing_evidence"])
+        self.assertEqual([], report["ready"])
+        with self.assertRaises(LocalWorkflowError):
+            e.transition(self.developer, identifier, "verified", "Verify", "Stale source")
+        m.assess(self.developer, mid, m.CAPABILITIES[0], "New owner assessment")
+        e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [], ["Review handoff"], [], "Refresh")
+        self.assertEqual(["manual_verification"], e.review(self.developer, identifier)["ready"])
+        e.transition(self.developer, identifier, "verified", "Verified externally", "Manual verification")
+        self.assertEqual(1, len(e.status(self.developer)["verified"]))
+
+    def test_evolution_assurance_evidence_expiry_and_missing_source(self):
+        from datetime import timedelta
+        from src.developer import evolution as e, maturity as m, recovery_governance as g
+        _, _, mature, record = self._evolution_setup(m.CAPABILITIES[1])
+        identifier = record["evolution_id"]
+        e.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        self.assertEqual(["manual_approval"], e.review(self.developer, identifier)["ready"])
+        with patch.object(g, "_now", return_value=g._now() + timedelta(days=400)):
+            self.assertTrue(e.review(self.developer, identifier)["missing_evidence"])
+            with self.assertRaises(LocalWorkflowError):
+                e.transition(self.developer, identifier, "approved", "Approve", "Expired")
+        original = e.history(self.developer, identifier)
+        with patch.object(m, "history", side_effect=LocalWorkflowError("Source unavailable")):
+            self.assertTrue(e.review(self.developer, identifier)["missing_evidence"])
+            self.assertEqual(original, e.history(self.developer, identifier))
+
+    def test_evolution_planning_revisions_preserve_ownership_and_dependencies(self):
+        from src.developer import evolution as e
+        identifier = e.create(self.developer, "recovery-verification", "improvement", "owner", "Plan")["evolution_id"]
+        record = e.add_plan(self.developer, identifier, ["Document renewal"], ["recovery-ownership"],
+                            ["Review next quarter"], "planner", "Direction")
+        first = record["plans"][0]
+        e.add_plan(self.developer, identifier, ["Review renewal procedure"], ["recovery-evidence-validation"],
+                   ["Review after evidence renewal"], "new-planner", "Revise direction", first["plan_id"])
+        plans = e.plans(self.developer)["plans"]
+        self.assertFalse(plans[0]["current"])
+        self.assertTrue(plans[1]["current"])
+        self.assertEqual(first, e.history(self.developer, identifier)["record"]["plans"][0])
+        self.assertEqual("planner", plans[0]["owner"])
+        for supersedes in ("missing", first["plan_id"]):
+            with self.assertRaises(LocalWorkflowError):
+                e.add_plan(self.developer, identifier, ["Improve"], [], ["Review"], "owner", "Bad revision", supersedes)
+        self.assertEqual(2, len(e.plans(self.developer)["plans"]))
+
+    def test_evolution_cli_reports_read_only_and_source_compatibility(self):
+        from src.cli import main
+        from src.developer import maturity as m
+        _, _, mature = self._maturity_setup()
+        m.assess(self.developer, mature["maturity_id"], m.CAPABILITIES[0], "Assess")
+        commands = [("evolution-create", "recovery-verification", "--owner", "maintainer"),
+                    ("evolution-impact-add", "evolution-001", "--capability", m.CAPABILITIES[0], "--maturity-id", mature["maturity_id"], "--note", "Reviewed"),
+                    ("evolution-transition", "evolution-001", "reviewing", "--note", "Manual decision"),
+                    ("evolution-plan-add", "evolution-001", "--improvement", "Review renewal", "--dependency", "recovery-ownership", "--milestone", "Quarterly review", "--owner", "planner")]
+        for command in commands:
+            with redirect_stdout(StringIO()) as output:
+                self.assertEqual(0, main(["local", *command, "--reason", "Explicit action", "--workspace", str(self.workspace_path), "--json"]))
+            self.assertEqual("evolution-001", json.loads(output.getvalue())["evolution_id"])
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("evolution-status", "evolution-history", "evolution-impact", "evolution-review", "evolution-plan"):
+            args = ["local", command]
+            if command not in {"evolution-status", "evolution-plan"}:
+                args.append("evolution-001")
+            with redirect_stdout(StringIO()) as output:
+                self.assertEqual(0, main([*args, "--workspace", str(self.workspace_path), "--json"]))
+            self.assertEqual("developer-recovery-evolution", json.loads(output.getvalue())["mode"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+
+    def test_evolution_linked_findings_require_manual_source_resolution(self):
+        from src.developer import evolution as e, maturity as m, assurance_operations as ops, recovery_governance as g
+        source, operation = self._assurance_operations_setup()
+        ops.record_review(self.developer, operation["operation_id"], "Capture findings")
+        finding = ops.findings(self.developer)["active"][0]["finding_id"]
+        mid = m.create(self.developer, "finding-management", [source["assurance_id"]], "owner", "Scope")["maturity_id"]
+        m.assess(self.developer, mid, m.CAPABILITIES[0], "Assess ownership")
+        identifier = e.create(self.developer, "recovery-verification", "improvement", "owner", "Plan")["evolution_id"]
+        e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [finding], [], [], "Link finding")
+        e.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        self.assertIn(finding + ":finding_unresolved", e.review(self.developer, identifier)["missing_evidence"])
+        g.change(self.developer, source["assurance_id"], "transition", "Activate", status="active")
+        g.record_check(self.developer, source["assurance_id"], source["assurance_id"], "Record evidence")
+        self.assertIn(finding + ":finding_unresolved", e.review(self.developer, identifier)["missing_evidence"])
+        ops.record_review(self.developer, operation["operation_id"], "Confirm resolved")
+        e.record_impact(self.developer, identifier, [m.CAPABILITIES[0]], [mid], [finding], [], [], "Refresh evidence")
+        before = ops.findings(self.developer)
+        self.assertEqual(["manual_approval"], e.review(self.developer, identifier)["ready"])
+        e.transition(self.developer, identifier, "approved", "Approve", "Manual approval")
+        self.assertEqual(before, ops.findings(self.developer))
+        old = e.impact(self.developer, identifier)["impact_history"][0]["evidence"]["references"]
+        self.assertEqual("open", next(r["snapshot"]["status"] for r in old if r["reference"] == finding))
+
+    def test_evolution_journal_atomicity_corruption_and_workspace_isolation(self):
+        from src.developer import evolution as e
+        self.assertEqual([], e.status(self.developer)["evolutions"])
+        self.assertEqual([], e.plans(self.developer)["plans"])
+        self.assertFalse(e._root(self.developer).exists())
+        record = e.create(self.developer, "recovery-verification", "improvement", "owner", "Plan")
+        with patch.object(e.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                e.transition(self.developer, record["evolution_id"], "reviewing", "Review", "Review")
+        self.assertEqual(record, e.history(self.developer, record["evolution_id"])["record"])
+        self.assertFalse(list(e._root(self.developer).glob("*.tmp")))
+        path = next(e._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        event = json.loads(original)
+        event["previous_digest"] = "broken"
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            e.status(self.developer)
+        path.write_bytes(original)
+        with self.assertRaises(LocalWorkflowError):
+            e.status(DeveloperWorkspace(self.research_root / "evolution", research_roots=[self.research_root]))
+
+
+    def _strategic_setup(self):
+        from src.developer import strategic_governance as g
+        source, operation, mature, evolved = self._evolution_setup()
+        record = g.create(self.developer, "Improve recovery verification reliability", "strategy-owner",
+                          ["recovery-ownership"], [evolved["evolution_id"]], [], ["Initial direction"], [], "Define strategy")
+        record = g.add_roadmap(self.developer, record["governance_id"], "Review ownership procedure", "roadmap-owner", "Next quarter", [], "Plan roadmap")
+        return source, mature, evolved, record
+
+    def _strategic_activate(self, record):
+        from src.developer import strategic_governance as g
+        identifier = record["governance_id"]
+        g.transition(self.developer, identifier, "reviewing", "Start review", "Review")
+        for state in ("approved", "active"):
+            g.record_review(self.developer, identifier, "Evidence reviewed manually", "Review")
+            record = g.transition(self.developer, identifier, state, "Human decision", "Decision")
+        return record
+
+    def test_strategic_lifecycle_reviews_completion_and_prior_history(self):
+        from src.developer import strategic_governance as g, evolution as e, maturity as m
+        _, mature, evolved, record = self._strategic_setup()
+        identifier, rid = record["governance_id"], record["roadmap"][0]["roadmap_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        readiness = m.readiness(self.developer)
+        self._strategic_activate(record)
+        for state in ("scheduled", "active", "completed"):
+            g.transition_roadmap(self.developer, identifier, rid, state, "Manual roadmap decision", "Decision")
+        g.record_review(self.developer, identifier, "Inspect completion", "Review")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition(self.developer, identifier, "completed", "Not yet verified", "Invalid")
+        for state in ("reviewing", "approved", "implemented", "verified"):
+            e.transition(self.developer, evolved["evolution_id"], state, "Explicit source decision", "Source workflow")
+        g.record_review(self.developer, identifier, "Verified source reviewed", "Review")
+        self.assertEqual(["manual_completed"], g.review(self.developer, identifier)["ready"])
+        g.transition(self.developer, identifier, "completed", "Objective achieved", "Decision")
+        dependent = g.create(self.developer, "Follow-up strategy", "owner", ["capability"], [], [identifier], [], [], "Dependency")
+        self.assertTrue(g.dependencies(self.developer)["dependencies"][0]["resolved"])
+        record = g.transition(self.developer, identifier, "retired", "Archive direction", "Decision")
+        self.assertFalse(g.dependencies(self.developer)["dependencies"][0]["resolved"])
+        self.assertEqual("retired", record["status"])
+        self.assertEqual(4, len(record["reviews"]))
+        self.assertEqual(readiness, m.readiness(self.developer))
+        for path, content in before.items():
+            self.assertEqual(content, path.read_bytes())
+        self.assertEqual("initial", m.history(self.developer, mature["maturity_id"])["record"]["level"])
+
+    def test_strategic_invalid_transitions_missing_evidence_and_terminal_states(self):
+        from src.developer import strategic_governance as g
+        record = g.create(self.developer, "Future direction", "owner", ["evidence-validation"], [], [], [], [], "Plan")
+        identifier = record["governance_id"]
+        for state in ("planned", "approved", "active", "completed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                g.transition(self.developer, identifier, state, "Manual", "Invalid")
+        self.assertEqual(record, g.history(self.developer, identifier)["record"])
+        g.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        g.record_review(self.developer, identifier, "Incomplete proposal reviewed", "Review")
+        self.assertIn("linked_evolution_missing", g.review(self.developer, identifier)["missing_evidence"])
+        with self.assertRaises(LocalWorkflowError):
+            g.transition(self.developer, identifier, "approved", "Approve", "Invalid")
+        record = g.transition(self.developer, identifier, "retired", "Withdraw", "Decision")
+        with self.assertRaises(LocalWorkflowError):
+            g.add_roadmap(self.developer, identifier, "New work", "owner", "Next year", [], "Invalid")
+        self.assertEqual(record, g.history(self.developer, identifier)["record"])
+
+    def test_strategic_objective_revisions_keep_prior_links_and_ownership(self):
+        from src.developer import strategic_governance as g
+        _, _, evolved, record = self._strategic_setup()
+        identifier = record["governance_id"]
+        original = g.history(self.developer, identifier)["record"]["history"][:]
+        record = g.update(self.developer, identifier, "Renew assurance direction", "new-owner", ["evidence-validation"],
+                          [evolved["evolution_id"]], ["verification-scheduling"], ["Revised after review"], ["Pending resources"], "Revision")
+        self.assertEqual(original, record["history"][:len(original)])
+        self.assertEqual("new-owner", record["owner"])
+        self.assertEqual("strategy-owner", record["history"][0]["owner"])
+        self.assertEqual([evolved["evolution_id"]], record["history"][0]["evolution_ids"])
+        report = g.review(self.developer, identifier)
+        self.assertIn("Pending resources", report["risks"])
+        self.assertTrue(g.plan_review(self.developer)["risks"])
+        with self.assertRaises(LocalWorkflowError):
+            g.update(self.developer, identifier, "Invalid link", "owner", ["capability"], ["evolution-missing"], [], [], [], "Invalid")
+
+    def test_strategic_dependency_visibility_manual_resolution_and_cycles(self):
+        from src.developer import strategic_governance as g
+        first = g.create(self.developer, "First", "owner", ["evidence-validation"], [], ["verification-scheduling"], [], [], "Plan")
+        second = g.create(self.developer, "Second", "owner", ["evidence-validation"], [], [first["governance_id"]], [], [], "Plan")
+        before = g.status(self.developer)
+        with self.assertRaises(LocalWorkflowError):
+            g.update(self.developer, first["governance_id"], "First", "owner", ["evidence-validation"], [], [second["governance_id"]], [], [], "Cycle")
+        with self.assertRaises(LocalWorkflowError):
+            g.create(self.developer, "Unknown dependency", "owner", ["capability"], [], ["governance-999"], [], [], "Invalid")
+        self.assertEqual(before, g.status(self.developer))
+        self.assertEqual(2, len(g.dependencies(self.developer)["blocked"]))
+        g.review_dependency(self.developer, first["governance_id"], "verification-scheduling", "resolved", "Schedule reviewed externally", "Manual resolution")
+        self.assertEqual(1, len(g.dependencies(self.developer)["blocked"]))
+        with self.assertRaises(LocalWorkflowError):
+            g.review_dependency(self.developer, second["governance_id"], first["governance_id"], "resolved", "Cannot override", "Invalid")
+        g.review_dependency(self.developer, first["governance_id"], "verification-scheduling", "unresolved", "Prerequisite changed", "Reopen")
+        self.assertEqual(2, len(g.dependencies(self.developer)["blocked"]))
+        self.assertEqual(2, len(g.history(self.developer, first["governance_id"])["record"]["dependency_reviews"]))
+
+    def test_strategic_roadmap_updates_deferrals_and_dependencies(self):
+        from src.developer import strategic_governance as g
+        _, _, _, record = self._strategic_setup()
+        identifier, first = record["governance_id"], record["roadmap"][0]["roadmap_id"]
+        record = g.add_roadmap(self.developer, identifier, "Follow-up review", "second-owner", "Following quarter", [first], "Dependency")
+        second = record["roadmap"][-1]["roadmap_id"]
+        g.update_roadmap(self.developer, identifier, first, "Revised procedure review", "new-owner", "2027 Q1", [], "Revise period")
+        with self.assertRaises(LocalWorkflowError):
+            g.update_roadmap(self.developer, identifier, first, "Cycle", "owner", "Later", [second], "Invalid")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition_roadmap(self.developer, identifier, first, "active", "Skip scheduling", "Invalid")
+        self._strategic_activate(record)
+        g.transition_roadmap(self.developer, identifier, second, "scheduled", "Schedule manually", "Decision")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition_roadmap(self.developer, identifier, second, "active", "Dependency unresolved", "Invalid")
+        for state in ("scheduled", "deferred", "scheduled", "active", "completed"):
+            g.transition_roadmap(self.developer, identifier, first, state, "Manual roadmap decision", "Decision")
+        g.transition_roadmap(self.developer, identifier, second, "active", "Prerequisite complete", "Decision")
+        report = g.dependencies(self.developer)
+        self.assertFalse(report["blocked"])
+        items = g.status(self.developer)["roadmap"]
+        self.assertEqual([first, second], [r["roadmap_id"] for r in items])
+        self.assertEqual("roadmap-owner", items[0]["history"][0]["owner"])
+        self.assertEqual("2027 Q1", items[0]["target_period"])
+        with self.assertRaises(LocalWorkflowError):
+            g.update_roadmap(self.developer, identifier, first, "Completed edit", "owner", "Later", [], "Invalid")
+
+    def test_strategic_review_staleness_and_evolution_maturity_compatibility(self):
+        from src.developer import strategic_governance as g, evolution as e, maturity as m
+        _, mature, evolved, record = self._strategic_setup()
+        identifier = record["governance_id"]
+        g.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        g.record_review(self.developer, identifier, "Review evidence", "Review")
+        self.assertEqual(["manual_approved"], g.review(self.developer, identifier)["ready"])
+        e.add_plan(self.developer, evolved["evolution_id"], ["Renew instructions"], [], ["Quarterly review"], "owner", "Source plan")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition(self.developer, identifier, "approved", "Stale review", "Invalid")
+        g.record_review(self.developer, identifier, "Review changed plan", "Review")
+        m.assign(self.developer, mature["maturity_id"], "new-owner", "Handoff")
+        report = g.review(self.developer, identifier)
+        self.assertTrue(report["missing_evidence"])
+        self.assertFalse(report["ready"])
+        g.record_review(self.developer, identifier, "Inspect missing evidence", "Review")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition(self.developer, identifier, "approved", "Cannot force approval", "Invalid")
+        prior = g.history(self.developer, identifier)
+        with patch.object(e, "history", side_effect=LocalWorkflowError("Source unavailable")):
+            self.assertIn(evolved["evolution_id"] + ":evolution_unavailable", g.review(self.developer, identifier)["missing_evidence"])
+            self.assertEqual(prior, g.history(self.developer, identifier))
+
+    def test_strategic_cli_reports_are_read_only_and_preserve_assurance_history(self):
+        from src.developer import strategic_governance as g
+        _, _, evolved, record = self._strategic_setup()
+        identifier = record["governance_id"]
+        prior_sources = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json") if g._root(self.developer) not in p.parents}
+        def run(*args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        created = run("governance-create", "CLI objective", "--owner", "owner", "--capability", "evidence-validation", "--evolution-id", evolved["evolution_id"], "--reason", "Create")
+        cid = created["governance_id"]
+        run("governance-update", cid, "--objective", "Updated CLI objective", "--owner", "owner", "--capability", "evidence-validation", "--evolution-id", evolved["evolution_id"], "--dependency", "scheduling", "--reason", "Update")
+        road = run("governance-roadmap-add", cid, "--description", "Review", "--owner", "owner", "--target-period", "Next quarter", "--reason", "Plan")["roadmap"][0]["roadmap_id"]
+        run("governance-roadmap-update", cid, "--roadmap-id", road, "--description", "Review procedure", "--owner", "new-owner", "--target-period", "Later quarter", "--reason", "Update")
+        run("governance-roadmap-transition", cid, "scheduled", "--roadmap-id", road, "--note", "Manual scheduling", "--reason", "Decision")
+        run("governance-dependency-review", cid, "scheduling", "resolved", "--note", "Prerequisite confirmed", "--reason", "Review")
+        run("governance-transition", cid, "reviewing", "--note", "Start review", "--reason", "Review")
+        run("governance-record-review", cid, "--note", "Current evidence reviewed", "--reason", "Review")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("governance-status", "governance-history", "governance-review", "governance-dependencies", "governance-plan-review"):
+            args = (command, identifier) if command in {"governance-history", "governance-review"} else (command,)
+            self.assertEqual(g.MODE, run(*args)["mode"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        for path, content in prior_sources.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_strategic_external_roadmap_prerequisites_require_explicit_review(self):
+        from src.developer import strategic_governance as g
+        _, _, _, record = self._strategic_setup()
+        identifier, rid = record["governance_id"], record["roadmap"][0]["roadmap_id"]
+        g.update_roadmap(self.developer, identifier, rid, "Review procedure", "owner", "Next quarter", ["verification-scheduling"], "Prerequisite")
+        self._strategic_activate(record)
+        g.transition_roadmap(self.developer, identifier, rid, "scheduled", "Manual schedule", "Decision")
+        with self.assertRaises(LocalWorkflowError):
+            g.transition_roadmap(self.developer, identifier, rid, "active", "Unresolved prerequisite", "Invalid")
+        g.review_dependency(self.developer, identifier, "verification-scheduling", "resolved", "Schedule checked externally", "Manual resolution", roadmap_id=rid)
+        g.transition_roadmap(self.developer, identifier, rid, "active", "Prerequisite reviewed", "Decision")
+        g.review_dependency(self.developer, identifier, "verification-scheduling", "unresolved", "Schedule changed", "Reopen", roadmap_id=rid)
+        with self.assertRaises(LocalWorkflowError):
+            g.transition_roadmap(self.developer, identifier, rid, "completed", "Dependency reopened", "Invalid")
+        self.assertTrue(g.plan_review(self.developer)["warnings"])
+        self.assertEqual("active", g.status(self.developer)["roadmap"][0]["status"])
+
+    def test_strategic_journal_atomicity_corruption_empty_reports_and_isolation(self):
+        from src.developer import strategic_governance as g
+        self.assertEqual([], g.status(self.developer)["objectives"])
+        self.assertEqual([], g.dependencies(self.developer)["dependencies"])
+        self.assertEqual([], g.plan_review(self.developer)["ready"])
+        self.assertFalse(g._root(self.developer).exists())
+        for reason, owner in (("", "owner"), ("Plan", "")):
+            with self.assertRaises(LocalWorkflowError):
+                g.create(self.developer, "Objective", owner, ["capability"], [], [], [], [], reason)
+        record = g.create(self.developer, "Objective", "owner", ["capability"], [], [], [], [], "Plan")
+        identifier = record["governance_id"]
+        with patch.object(g.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                g.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        self.assertEqual(record, g.history(self.developer, identifier)["record"])
+        self.assertFalse(list(g._root(self.developer).glob("*.tmp")))
+        path = next(g._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        event = json.loads(original)
+        event["previous_digest"] = "broken"
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            g.status(self.developer)
+        path.write_bytes(original)
+        with self.assertRaises(LocalWorkflowError):
+            g.status(DeveloperWorkspace(self.research_root / "strategic", research_roots=[self.research_root]))
+
+
+    def _governance_ops_setup(self):
+        from src.developer import governance_operations as o
+        source, mature, evolved, strategic = self._strategic_setup()
+        record = o.create(self.developer, strategic["governance_id"], "Continue assurance improvement", "decision-owner", "Record decision proposal")
+        return source, mature, evolved, strategic, record
+
+    def _governance_ops_decide(self, identifier):
+        from src.developer import governance_operations as o
+        o.transition(self.developer, identifier, "reviewing", "Begin review", "Review")
+        o.record_review(self.developer, identifier, "Human review of current governance", [], "Decision rationale confirmed manually", "Review")
+        return o.transition(self.developer, identifier, "decided", "Proceed with follow-up", "Human decision")
+
+    def test_governance_ops_decision_lifecycle_actions_and_closure_history(self):
+        from datetime import timedelta
+        from src.developer import governance_operations as o
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        original = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        o.transition(self.developer, identifier, "deferred", "Await review", "Defer")
+        o.transition(self.developer, identifier, "open", "Resume consideration", "Resume")
+        self._governance_ops_decide(identifier)
+        item = o.add_action(self.developer, identifier, "Review renewal procedure", "action-owner", (o._now().date() + timedelta(days=7)).isoformat(), "Follow-up")["actions"][0]
+        with self.assertRaises(LocalWorkflowError):
+            o.transition(self.developer, identifier, "closed", "Open action remains", "Invalid")
+        o.transition_action(self.developer, identifier, item["action_id"], "in_progress", "Started manually", [], None, "Work")
+        o.transition_action(self.developer, identifier, item["action_id"], "completed", "Reviewed procedure", [], "Procedure checked manually", "Complete")
+        before = o.decisions(self.developer)
+        self.assertEqual(1, len(o.close_check(self.developer)["passed"]))
+        self.assertEqual(before, o.decisions(self.developer))
+        closed = o.transition(self.developer, identifier, "closed", "Closure evidence reviewed", "Close explicitly")
+        self.assertEqual("closed", closed["status"])
+        self.assertFalse(closed["history"][-1]["closure"]["blocked"])
+        self.assertEqual("Procedure checked manually", closed["actions"][0]["completion_evidence"]["manual_reason"])
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+
+    def test_governance_ops_invalid_transitions_attribution_and_missing_proof(self):
+        from src.developer import governance_operations as o
+        _, _, _, strategic, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        for state in ("open", "decided", "closed", "unknown"):
+            with self.assertRaises(LocalWorkflowError):
+                o.transition(self.developer, identifier, state, "Invalid", "Invalid")
+        self.assertEqual(record, o.decisions(self.developer)["decisions"][0])
+        for owner, reason in (("", "Reason"), ("owner", "")):
+            with self.assertRaises(LocalWorkflowError):
+                o.create(self.developer, strategic["governance_id"], "Decision", owner, reason)
+        with self.assertRaises(LocalWorkflowError):
+            o.create(self.developer, "governance-999", "Unknown objective", "owner", "Invalid")
+        item = o.add_action(self.developer, identifier, "Follow up", "owner", "2027-01-01", "Action")["actions"][0]
+        with self.assertRaises(LocalWorkflowError):
+            o.transition_action(self.developer, identifier, item["action_id"], "completed", "Skip progress", [], None, "Invalid")
+        o.transition_action(self.developer, identifier, item["action_id"], "in_progress", "Start", [], None, "Work")
+        with self.assertRaises(LocalWorkflowError):
+            o.transition_action(self.developer, identifier, item["action_id"], "completed", "Missing proof", [], None, "Invalid")
+        self.assertEqual("in_progress", o.actions(self.developer)["actions"][0]["status"])
+        self.assertTrue(o.followup(self.developer)["missing_evidence"])
+
+    def test_governance_ops_overdue_deferrals_and_post_closure_followup(self):
+        from datetime import timedelta
+        from src.developer import governance_operations as o
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        self._governance_ops_decide(identifier)
+        now = o._now()
+        item = o.add_action(self.developer, identifier, "Follow-up review", "owner", (now.date() - timedelta(days=1)).isoformat(), "Action")["actions"][0]
+        aid = item["action_id"]
+        self.assertEqual(1, len(o.actions(self.developer)["overdue"]))
+        o.defer_action(self.developer, identifier, aid, (now.date() + timedelta(days=2)).isoformat(), "Explicit follow-up window", "Defer")
+        self.assertEqual([], o.actions(self.developer)["overdue"])
+        self.assertEqual(1, len(o.close_check(self.developer)["passed"]))
+        o.transition(self.developer, identifier, "closed", "Documented deferral accepted", "Close")
+        closed_event = o.decisions(self.developer)["decisions"][0]["history"][-1]
+        with patch.object(o, "_now", return_value=now + timedelta(days=3)):
+            self.assertEqual(1, len(o.followup(self.developer)["overdue_actions"]))
+            self.assertTrue(o.close_check(self.developer)["blocked"])
+        o.transition_action(self.developer, identifier, aid, "in_progress", "Resume deferred work", [], None, "Resume")
+        o.transition_action(self.developer, identifier, aid, "completed", "Follow-up confirmed", [], "Manual completion after closure", "Complete")
+        current = o.decisions(self.developer)["decisions"][0]
+        self.assertIn(closed_event, current["history"])
+        self.assertEqual("closed", current["status"])
+        with self.assertRaises(LocalWorkflowError):
+            o.add_action(self.developer, identifier, "New scope", "owner", "2027-01-01", "Invalid")
+
+    def test_governance_ops_exception_acceptance_expiry_and_mitigation(self):
+        from datetime import timedelta
+        from src.developer import governance_operations as o
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        self._governance_ops_decide(identifier)
+        now = o._now()
+        record = o.add_exception(self.developer, identifier, "Temporary procedure exception", "exception-owner", (now + timedelta(days=2)).isoformat(), "Pending replacement review")
+        eid = record["exceptions"][0]["exception_id"]
+        self.assertTrue(o.close_check(self.developer)["blocked"])
+        o.transition_exception(self.developer, identifier, eid, "accepted", "Human acceptance until expiry", [], None, "Accept")
+        self.assertEqual(1, len(o.close_check(self.developer)["passed"]))
+        with patch.object(o, "_now", return_value=now + timedelta(days=3)):
+            before = o.decisions(self.developer)
+            self.assertEqual(1, len(o.exceptions(self.developer)["expired"]))
+            self.assertTrue(o.close_check(self.developer)["blocked"])
+            self.assertEqual(before, o.decisions(self.developer))
+            o.transition_exception(self.developer, identifier, eid, "expired", "Record observed expiry", [], None, "Expire explicitly")
+        o.transition_exception(self.developer, identifier, eid, "mitigated", "Replacement reviewed", [], "Manual mitigation evidence", "Mitigate")
+        o.transition_exception(self.developer, identifier, eid, "closed", "Exception resolved", [], "Resolution confirmed manually", "Close")
+        exception = o.exceptions(self.developer)["exceptions"][0]
+        self.assertEqual(4, len(exception["review_history"]))
+        self.assertEqual("Pending replacement review", exception["reason"])
+        self.assertEqual([], o.exceptions(self.developer)["unresolved"])
+        with self.assertRaises(LocalWorkflowError):
+            o.transition_exception(self.developer, identifier, eid, "accepted", "Cannot reopen", [], None, "Invalid")
+
+    def test_governance_ops_evidence_files_drift_missing_and_containment(self):
+        from src.developer import governance_operations as o
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        path = self.workspace_path / "closure-proof.txt"
+        path.write_text("Manually reviewed decision evidence", encoding="utf-8")
+        o.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        o.record_review(self.developer, identifier, "Review evidence file", [path.name], None, "Review")
+        o.transition(self.developer, identifier, "decided", "Evidence reviewed", "Decide")
+        self.assertEqual(1, len(o.close_check(self.developer)["passed"]))
+        original = o.decisions(self.developer)
+        path.write_text("Changed evidence", encoding="utf-8")
+        self.assertTrue(o.close_check(self.developer)["blocked"])
+        with self.assertRaises(LocalWorkflowError):
+            o.transition(self.developer, identifier, "closed", "Changed proof", "Invalid")
+        path.unlink()
+        self.assertTrue(o.followup(self.developer)["missing_evidence"])
+        self.assertEqual(original, o.decisions(self.developer))
+        for reference in ("../outside.txt", str(self.repository / "source.py"), "missing.txt"):
+            with self.assertRaises(LocalWorkflowError):
+                o.record_review(self.developer, identifier, "Invalid evidence reference", [reference], None, "Invalid")
+        o.record_review(self.developer, identifier, "Explicit alternative closure rationale", [], "Reviewer documented the outcome manually", "Refresh")
+        self.assertEqual(1, len(o.close_check(self.developer)["passed"]))
+
+    def test_governance_ops_source_drift_ownership_and_earlier_phase_compatibility(self):
+        from src.developer import governance_operations as o, strategic_governance as g, maturity as m, evolution as e
+        _, mature, evolved, strategic, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json") if o._root(self.developer) not in p.parents}
+        ready = m.readiness(self.developer)
+        self._governance_ops_decide(identifier)
+        o.followup(self.developer)
+        o.close_check(self.developer)
+        self.assertEqual(ready, m.readiness(self.developer))
+        for path, content in before.items():
+            self.assertEqual(content, path.read_bytes())
+        o.assign(self.developer, identifier, "new-owner", "Ownership handoff")
+        self.assertIn("decision_owner_review_stale", o.close_check(self.developer)["blocked"][0]["blocked"])
+        o.record_review(self.developer, identifier, "New owner review", [], "Manual rationale", "Review")
+        g.add_roadmap(self.developer, strategic["governance_id"], "New direction", "owner", "Next year", [], "Change plan")
+        self.assertIn("governance_review_stale", o.close_check(self.developer)["blocked"][0]["blocked"])
+        original = o.decisions(self.developer)
+        with patch.object(g, "history", side_effect=LocalWorkflowError("Source unavailable")):
+            self.assertIn("related_governance_unavailable", o.close_check(self.developer)["blocked"][0]["blocked"])
+            self.assertEqual(original["decisions"][0], o.decision(self.developer, identifier)["record"])
+        self.assertEqual("initial", m.history(self.developer, mature["maturity_id"])["record"]["level"])
+        self.assertEqual("planned", e.history(self.developer, evolved["evolution_id"])["record"]["status"])
+
+    def test_governance_ops_cli_mutations_reports_and_exception_ownership(self):
+        from datetime import timedelta
+        from src.developer import governance_operations as o
+        _, _, _, strategic, _ = self._governance_ops_setup()
+        def run(*args):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["local", *args, "--workspace", str(self.workspace_path), "--json"]))
+            return json.loads(output.getvalue())
+        identifier = run("governance-decision-create", strategic["governance_id"], "--decision", "CLI follow-up", "--owner", "owner", "--reason", "Create")["decision_id"]
+        run("governance-decision-assign", identifier, "--owner", "reviewer", "--reason", "Handoff")
+        run("governance-decision-transition", identifier, "reviewing", "--note", "Review", "--reason", "Review")
+        run("governance-decision-review", identifier, "--note", "Review evidence", "--closure-reason", "Manual decision rationale", "--reason", "Review")
+        run("governance-decision-transition", identifier, "decided", "--note", "Human decision", "--reason", "Decide")
+        aid = run("governance-action-add", identifier, "--description", "Follow-up", "--owner", "owner", "--due-date", "2027-01-01", "--reason", "Action")["actions"][0]["action_id"]
+        run("governance-action-assign", identifier, aid, "--owner", "new-owner", "--due-date", "2027-02-01", "--reason", "Handoff")
+        run("governance-action-defer", identifier, aid, "--until", (o._now().date() + timedelta(days=7)).isoformat(), "--note", "Deferred by owner", "--reason", "Defer")
+        run("governance-action-transition", identifier, aid, "cancelled", "--note", "Replaced by another plan", "--closure-reason", "Explicit cancellation rationale", "--reason", "Cancel")
+        eid = run("governance-exception-add", identifier, "--description", "Temporary exception", "--owner", "owner", "--expires-at", (o._now() + timedelta(days=7)).isoformat(), "--action-id", aid, "--reason", "Exception")["exceptions"][0]["exception_id"]
+        run("governance-exception-transition", identifier, eid, "accepted", "--note", "Human acceptance", "--reason", "Accept")
+        run("governance-exception-assign", identifier, eid, "--owner", "new-owner", "--reason", "Handoff")
+        self.assertEqual("open", o.decision(self.developer, identifier)["exceptions"][0]["status"])
+        run("governance-exception-transition", identifier, eid, "closed", "--note", "Resolved", "--closure-reason", "Manual resolution", "--reason", "Close")
+        before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
+        for command in ("governance-decisions", "governance-actions", "governance-exceptions", "governance-decision", "governance-followup", "governance-close-check"):
+            args = (command, identifier) if command == "governance-decision" else (command,)
+            self.assertEqual(o.MODE, run(*args)["mode"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()})
+        run("governance-decision-transition", identifier, "closed", "--note", "Closure checked", "--reason", "Close")
+
+    def test_governance_ops_time_validation_missing_review_and_expired_acceptance(self):
+        from datetime import timedelta
+        from src.developer import governance_operations as o
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        now = o._now()
+        for due in ("", "2027-99-01", "20270101"):
+            with self.assertRaises(LocalWorkflowError):
+                o.add_action(self.developer, identifier, "Action", "owner", due, "Invalid")
+        for expiry in ("2027-01-01", (now - timedelta(days=1)).isoformat()):
+            with self.assertRaises(LocalWorkflowError):
+                o.add_exception(self.developer, identifier, "Exception", "owner", expiry, "Invalid")
+        with self.assertRaises(LocalWorkflowError):
+            o.add_exception(self.developer, identifier, "Exception", "owner", (now + timedelta(days=1)).isoformat(), "Invalid link", action_id="action-999")
+        o.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        with self.assertRaises(LocalWorkflowError):
+            o.transition(self.developer, identifier, "decided", "No recorded review", "Invalid")
+        o.record_review(self.developer, identifier, "Decision reviewed without closure evidence yet", [], None, "Review")
+        o.transition(self.developer, identifier, "decided", "Human decision", "Decide")
+        self.assertIn("closure_evidence_missing", o.close_check(self.developer)["blocked"][0]["blocked"])
+        from copy import deepcopy
+        state = o._load(self.developer)
+        forged = {**deepcopy(state["events"][-1]), "status": "closed", "closure": {"blocked": [], "decision_id": identifier}}
+        with self.assertRaises(ValueError):
+            o._apply(deepcopy(state), forged)
+        eid = o.add_exception(self.developer, identifier, "Temporary exception", "owner", (now + timedelta(days=1)).isoformat(), "Exception")["exceptions"][0]["exception_id"]
+        with patch.object(o, "_now", return_value=now + timedelta(days=2)):
+            with self.assertRaises(LocalWorkflowError):
+                o.transition_exception(self.developer, identifier, eid, "accepted", "Too late", [], None, "Invalid")
+        self.assertEqual("open", o.exceptions(self.developer)["exceptions"][0]["status"])
+
+    def test_governance_ops_journal_atomicity_corruption_and_empty_isolation(self):
+        from src.developer import governance_operations as o
+        for reader, field in ((o.decisions, "decisions"), (o.actions, "actions"), (o.exceptions, "exceptions"), (o.followup, "decisions"), (o.close_check, "passed")):
+            self.assertEqual([], reader(self.developer)[field])
+        self.assertFalse(o._root(self.developer).exists())
+        _, _, _, _, record = self._governance_ops_setup()
+        identifier = record["decision_id"]
+        with patch.object(o.os, "link", side_effect=FileExistsError("Concurrent append")):
+            with self.assertRaises(LocalWorkflowError):
+                o.transition(self.developer, identifier, "reviewing", "Review", "Review")
+        self.assertEqual(record, o.decisions(self.developer)["decisions"][0])
+        self.assertFalse(list(o._root(self.developer).glob("*.tmp")))
+        path = next(o._root(self.developer).glob("*.json"))
+        original = path.read_bytes()
+        event = json.loads(original)
+        event["sequence"] = 2
+        path.write_text(json.dumps(event), encoding="utf-8")
+        with self.assertRaises(LocalWorkflowError):
+            o.followup(self.developer)
+        path.write_bytes(original)
+        with self.assertRaises(LocalWorkflowError):
+            o.actions(DeveloperWorkspace(self.research_root / "governance-operations", research_roots=[self.research_root]))
 
 
 if __name__ == "__main__":

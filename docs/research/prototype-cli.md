@@ -497,3 +497,528 @@ separate. No research/benchmark/Humanize/release artifacts are changed.
 
 See [Phase 45](phase45-developer-retrieval-promotion-pipeline.md) for lifecycle states,
 atomic storage, validation gates, pause/resume API and recovery limitations.
+
+### Developer configuration snapshots (Phase 46)
+
+Create a versioned snapshot from a currently promoted source. Settings are copied
+from the approved promotion; changes require a new governed source and snapshot.
+
+```text
+prototype local config-create PROMOTION_ID --reason "Capture approved settings" --workspace EXTERNAL_WORKSPACE --json
+prototype local config-validate CONFIG_ID --reason "Verify evidence" --workspace EXTERNAL_WORKSPACE --json
+prototype local config-activate CONFIG_ID --reason "Select reference" --workspace EXTERNAL_WORKSPACE --json
+prototype local config-status --workspace EXTERNAL_WORKSPACE --json
+prototype local config-history --workspace EXTERNAL_WORKSPACE --json
+prototype local config-diff 1 2 --workspace EXTERNAL_WORKSPACE --json
+prototype local config-rollback CONFIG_ID --reason "Restore prior reference" --workspace EXTERNAL_WORKSPACE --json
+prototype local config-retire CONFIG_ID --reason "Close snapshot" --workspace EXTERNAL_WORKSPACE --json
+```
+
+Mutation commands require a reason and accept `--actor` (default `developer`).
+Configuration IDs such as `retrieval-config-001` identify immutable settings
+versions; diff arguments are numeric versions. Status shows the active reference,
+version, candidate/promotion, recent events and source eligibility findings.
+History includes creation, validation, activation, superseded retirement,
+explicit retirement and rollback events, with reasons and prior values.
+
+Activation requires validated status, current approval and passing policy checks.
+It preserves a rollback point. Rollback takes the current active ID and restores
+its prior reference, rechecking the prior source's eligibility. Stale activations
+and out-of-order rollbacks fail without changing history. Records remain in the
+external workspace and never modify source files.
+
+Configuration commands manage references; Phase 45 promotion commands remain the
+authority for runtime settings. Rolling back a configuration reference does not
+roll back its source promotion. There is one managed active reference per workspace.
+See [Phase 46](phase46-developer-retrieval-configuration-management.md) for the
+lifecycle, settings model, isolation boundary and recovery limitations.
+
+### Developer deployment control (Phase 47)
+
+Stage a validated (or already-active) configuration as an explicit developer
+deployment reference. Staging checks its existing promotion approval and records
+planned/staged events. It does not validate or activate the deployment automatically.
+
+```text
+prototype local deploy-stage CONFIG_ID --reason "Stage approved configuration" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-validate DEPLOYMENT_ID --reason "Check deployment evidence" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-activate DEPLOYMENT_ID --reason "Select validated rollout" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-status --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-diff DEPLOYMENT_A DEPLOYMENT_B --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-pause DEPLOYMENT_ID --reason "Pause rollout reference" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-resume DEPLOYMENT_ID --reason "Recheck and resume" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-rollback DEPLOYMENT_ID --reason "Restore previous deployment" --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-retire DEPLOYMENT_ID --reason "Close rollout" --workspace EXTERNAL_WORKSPACE --json
+```
+
+Mutations require a reason and accept `--actor` (default `developer`). Validation
+records configuration eligibility, policy results, source promotion/review, and
+rollback availability. Activation requires validated status and rechecks evidence
+and the saved previous deployment reference. Stale evidence requires restaging.
+No command automatically approves a promotion or review.
+
+Status shows selected/active and staged deployments, validation, complete history,
+and current blockers. Pausing retains the selected reference but reports no active
+deployment. Resume rechecks validation. Rollback restores the previous reference
+only if its configuration and governance evidence remain eligible. Diff reports
+configuration, deployment, validation, and lifecycle changes without scores.
+
+These controls only manage deployment references. Phase 46 configuration history
+and active references are preserved; Phase 45 promotions remain responsible for
+runtime retrieval settings. No deployment command modifies source files or silently
+changes retrieval behavior. Records stay in the external developer workspace.
+See [Phase 47](phase47-developer-retrieval-deployment-control.md) for lifecycle,
+staging recovery, rollback, concurrency, and developer-only limitations.
+
+### Developer deployment governance and audit (Phase 48)
+
+```text
+prototype local deploy-history --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-audit DEPLOYMENT_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-governance-check DEPLOYMENT_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local deploy-inspect DEPLOYMENT_ID --workspace EXTERNAL_WORKSPACE --json
+```
+
+These commands are read-only and require no actor or reason. History lists all
+deployments and events newest first. Audit provides the complete chronological
+timeline for one deployment, including actors, reasons, validation, rollback,
+implicit retirement and restoration. Audit records append atomically with state
+changes in the external developer deployment journal; Phase 47 history remains
+readable without migration.
+
+Governance reports `passed`, `warnings`, and `blocked` findings for ownership,
+source configuration, promotion approval, validation evidence, rollback target,
+lifecycle state and audit completeness. Missing validation blocks readiness;
+an initial deployment's empty rollback reference is a warning. A generated
+report exits successfully even when it contains blockers; automation must inspect
+`blocked`. Inspection combines the configuration, source promotion, evidence,
+governance status, audit timeline and rollback availability without taking action.
+
+There are no quality scores or automatic repairs. Local actors are attribution,
+not authenticated identities, and local hash chains are not tamper-proof storage.
+See [Phase 48](phase48-developer-retrieval-deployment-governance-audit.md) for the
+audit model, investigation workflow, compatibility and limitations.
+
+### Developer deployment operations and incidents (Phase 49)
+
+```text
+prototype local deploy-health DEPLOYMENT_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-create DEPLOYMENT_ID --owner "on-call" --reason "Unexpected behavior" --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-status --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-investigate INCIDENT_ID --reason "Review audit evidence" --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-inspect INCIDENT_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-resolve INCIDENT_ID --reason "Recovery verified" --recovery-action "Describe the manually completed action" --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-close INCIDENT_ID --reason "Review complete" --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-history --workspace EXTERNAL_WORKSPACE --json
+prototype local incident-diff INCIDENT_A INCIDENT_B --workspace EXTERNAL_WORKSPACE --json
+```
+
+Use the returned `operation_id` (for example `operation-001`) as `INCIDENT_ID`.
+Creation records an immutable owner (default `developer`), reason and `open`
+state. Mutations require `--reason` and accept `--actor` (default `developer`).
+The lifecycle is `open -> investigating -> resolved -> closed`; direct
+`open -> resolved` is also allowed. Closed incidents cannot reopen.
+
+Status groups active, resolved and closed incidents with ownership and deployment
+links. Inspect combines the captured deployment/configuration history with live
+deployment history, audit events, configuration/governance health and rollback
+availability. Health is read-only: `blocked` means governance blockers, `warning`
+means warnings or a non-active deployment, and `healthy` means neither. An initial
+deployment restoring an empty reference carries a warning. Reports exit zero when
+successfully generated, even when health is blocked; malformed journals fail.
+
+Resolution appends an attributed resolution and a linked recovery operation in
+one atomic event. `--recovery-action` records what a developer did; it executes
+nothing. Optional `--rollback-reference AUDIT_EVENT_ID` must refer to a recorded
+rollback for that deployment. Perform any approved rollback explicitly using the
+existing deployment workflow before referencing its audit event. Resolution does
+not grant approval or prove that health has recovered.
+
+Recovery history retains incidents, recovery actions, rollback references and
+resolution history. Diff compares affected deployments, captured configurations,
+incident timelines and resolutions without scores. Records live only under the
+external workspace's `optimization/operations`; no operational artifacts belong
+in the checkout. See [Phase 49](phase49-developer-retrieval-deployment-operations.md)
+for persistence, health semantics and limitations.
+
+### Developer deployment reliability and recovery preparation (Phase 50)
+
+```text
+prototype local reliability-check DEPLOYMENT_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-plan-create DEPLOYMENT_ID --owner "on-call" --reason "Prepare recovery handoff" --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-plan-status --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-plan-inspect PLAN_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-verify PLAN_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local readiness-create DEPLOYMENT_ID --reason "Assess operational readiness" --workspace EXTERNAL_WORKSPACE --json
+prototype local readiness-check READINESS_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local readiness-status --workspace EXTERNAL_WORKSPACE --json
+prototype local readiness-expire READINESS_ID --reason "End handoff window" --workspace EXTERNAL_WORKSPACE --json
+```
+
+Recovery plan IDs use `recovery-plan-001`; readiness IDs use `readiness-001`.
+Creation captures the deployment history and immutable configuration. A plan
+also captures the recorded predecessor, rollback target, previous configuration
+and owner. The latest plan for each deployment is its active planning record;
+older plans remain inspectable. Creating a new plan provides an explicit ownership
+handoff and requires fresh verification. An active plan is not execution approval.
+
+`reliability-check`, both status commands and plan inspection are read-only.
+Reliability reports `passed`, `warnings`, and `blocked` findings for audit
+completeness, health availability, rollback eligibility, recovery plan existence
+and verification, governance, and incident consistency. Active incidents produce
+a handoff warning; inconsistent histories block readiness. Missing or unverified
+plans block readiness. Initial deployments explicitly target an empty rollback
+reference and receive warnings, not invented previous configurations.
+
+`recovery-verify` appends verification findings and a `passed` or `failed`
+validation state to the plan's history. It checks the deployment history, owner,
+rollback reference, previous configuration, rollback eligibility and governance.
+It executes no recovery, rollback or configuration change. Repeating verification
+preserves previous findings. Live checks always reassess prerequisites; an old
+verification does not override current governance or eligibility failures.
+
+`readiness-check` records `pending -> checking -> passed|failed`. Interrupted
+checks can resume from `checking`. Any non-expired state can explicitly expire;
+expired and completed checks cannot restart, so create a new readiness record.
+The result is derived from live reliability findings, not selected by the caller.
+Status separates the recorded result from `evidence_current`; changed evidence
+sets `requires_new_check` without rewriting history. There is no automatic expiry
+timer. Warnings do not block a pass, and a pass never activates a deployment.
+
+All mutations accept `--actor` (default `developer`). Creation and expiry require
+`--reason`; verification/check commands provide default reasons and accept an
+override. Plan ownership defaults to `developer`. Successfully generated findings
+exit zero even if blocked or failed; callers must inspect their contents.
+Records stay in the external workspace's `optimization/reliability` directory.
+See [Phase 50](phase50-developer-retrieval-deployment-reliability.md) for lifecycle,
+evidence freshness, recovery verification and limitations.
+
+### Developer continuity and disaster recovery preparation (Phase 51)
+
+```text
+prototype local disaster-create DEPLOYMENT_ID --owner "on-call" --type configuration_failure --reason "Prepare incident handoff" --workspace EXTERNAL_WORKSPACE --json
+prototype local disaster-status --workspace EXTERNAL_WORKSPACE --json
+prototype local disaster-inspect SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local disaster-check SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local disaster-test SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local disaster-retire SCENARIO_ID --reason "Exercise complete" --workspace EXTERNAL_WORKSPACE --json
+prototype local continuity-status --workspace EXTERNAL_WORKSPACE --json
+```
+
+Create and verify a Phase 50 recovery plan first. `disaster-create` captures its
+latest plan by default; `--plan-id` selects an existing plan for the same
+deployment. IDs use `disaster-001` and `continuity-001`. Scenario types are
+`configuration_failure` (default), `deployment_failure`, `rollback_unavailable`,
+and `history_loss`. These labels describe the planning context; no fault is injected.
+
+Creation atomically captures a scenario and continuity record with ownership,
+recovery references, deployment/configuration dependencies, original deployment
+and audit history, the recovery plan, and manual restoration steps. Repeat
+`--step "Instruction"` to replace the default steps with local recovery knowledge.
+Steps are stored as text and never executed. Old records remain available after
+plan ownership handoffs; a superseded plan blocks the old scenario's live check.
+
+Check, status, inspection, and continuity status are read-only. `disaster-check`
+returns `passed`, `warnings`, and `blocked` findings for plan existence, rollback
+target, deployment/configuration/audit histories, ownership, and live Phase 50
+reliability/governance. Missing dependencies block validation while captured
+knowledge remains inspectable. Initial deployments explicitly restore an empty
+reference and receive a warning. Status separates recorded state from current
+validation and `evidence_current`.
+
+`disaster-test` records `planned -> testing -> validated|failed`. Failed and
+validated scenarios can be retested; an interrupted `testing` state can resume.
+Every completed attempt retains its date, scenario, owner, actor, findings and
+validation results. The continuity history records the same attempt atomically.
+Any non-retired scenario may retire; retired scenarios cannot restart.
+
+Testing validates recovery references only. It does not execute rollback, restore
+data, edit configuration, change deployment state, certify recovery success or
+measure recovery time. A passed attempt never overrides governance. Mutations
+accept `--actor` (default `developer`); creation and retirement require `--reason`,
+and test attempts have an overridable default reason. Owner defaults to `developer`.
+Successfully generated reports return zero even when blocked or failed; callers
+must inspect their findings. All new records stay in the external workspace's
+`optimization/continuity` journal. See [Phase 51](phase51-developer-retrieval-deployment-continuity.md).
+
+### Developer recovery assurance and evidence (Phase 52)
+
+```text
+prototype local recovery-assurance SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-evidence SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-verify-history SCENARIO_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local recovery-history-analysis --workspace EXTERNAL_WORKSPACE --json
+prototype local assurance-create SCENARIO_ID --owner "on-call" --reason "Capture recovery assurance" --valid-for-hours 24 --workspace EXTERNAL_WORKSPACE --json
+prototype local assurance-verify ASSURANCE_ID --workspace EXTERNAL_WORKSPACE --json
+prototype local assurance-expire ASSURANCE_ID --reason "End assurance window" --workspace EXTERNAL_WORKSPACE --json
+```
+
+The four `recovery-*` commands above are read-only. They do not create records or
+run simulations. Assurance shows recorded checks, ownership, previous simulations,
+evidence and current recovery readiness. Evidence separates available, missing
+and expired evidence and links related records. History verification checks
+previous simulations, evidence freshness, plan/reference validity, continuity
+completeness and live governance. Analysis preserves earlier failed simulations
+and assurance attempts alongside current unresolved findings and Phase 49 recovery
+history. These are operational findings, not scores or proof of successful recovery.
+
+Use `assurance-create` to create a pending record (`assurance-001`) for an existing
+scenario. `assurance-verify` records `pending -> verifying -> passed|failed` and
+captures immutable evidence in one outcome event. It requires a currently validated
+scenario with a completed simulation that matches live checks. Missing evidence
+produces warnings in evidence reports and prevents a passing verification.
+Interrupted verification can resume from `verifying`; completed records require
+a new assurance record. Any non-expired record can explicitly expire.
+
+Evidence has an ID, type, availability status, source, check time, expiration time,
+content snapshot and digest. The validity window defaults to 24 hours and accepts
+integer `--valid-for-hours` values from 1 through 8760. Time expiry, source changes
+or explicit expiry are reported without rewriting stored evidence. Current
+readiness can therefore be `expired` while the recorded result remains `passed`.
+Repeat read-only checks compare content independently of observation timestamps.
+
+Run `disaster-test` explicitly when simulation prerequisites change, then create
+and verify a new assurance record. A new verification does not inherit an old
+record's expiration. Old failures/evidence remain inspectable. If live continuity
+history becomes unreadable, known assurance records preserve their captured
+evidence and report missing evidence warnings and verification blockers.
+
+Mutations accept `--actor` (default `developer`). Creation/expiry require reasons;
+verification supplies an overridable default reason. Owner defaults to `developer`.
+Reports and completed verifications exit zero even when findings are blocked or
+failed; callers must inspect the payload. New records live only in the external
+workspace's `optimization/assurance` directory. No command executes recovery or
+changes deployment, configuration, incident or simulation state. See
+[Phase 52](phase52-developer-retrieval-recovery-assurance.md) for evidence semantics,
+verification history, analysis and limitations.
+
+### Continuous recovery assurance governance (Phase 53)
+
+The read-only commands `assurance-status`, `assurance-history ASSURANCE_ID`,
+`assurance-review ASSURANCE_ID`, `assurance-check` and `assurance-improvements`
+report ownership, lifecycle, recurring deadlines, missing/stale evidence and
+manual follow-up. `assurance-check` returns `passed`, `warnings`, `expired` and
+`manual_actions`; it never records a check or executes recovery. All accept
+`--workspace PATH` and `--json` and print JSON.
+
+Register an existing Phase 52 assurance with `assurance-register ASSURANCE_ID
+--owner OWNER --responsibility TEXT --every-hours 24 --reason TEXT`. Activate it
+with `assurance-transition ASSURANCE_ID active --reason TEXT`, then explicitly
+retain a completed same-scenario verification with `assurance-record-check
+ASSURANCE_ID --verification-id VERIFIED_ASSURANCE_ID --reason TEXT`.
+
+Governance has separate `draft`, `active`, `paused`, `expired` and terminal
+`retired` states. Allowed transitions, examples and report semantics are in
+[Phase 53](phase53-developer-retrieval-recovery-governance.md). Existing Phase 52
+`assurance-expire` semantics are unchanged; governance expiration uses
+`assurance-transition ID expired`.
+
+Use `assurance-assign ID --owner OWNER --responsibility TEXT --reason TEXT` for
+handoffs, `assurance-schedule ID --every-hours HOURS --reason TEXT` to change an
+interval, and `assurance-note ID --kind review|improvement --note TEXT --reason
+TEXT` to append notes. Mutations accept `--actor` (default `developer`).
+
+Intervals are 1–8760 elapsed UTC hours. Initial activation is due immediately;
+deadlines subsequently derive from the source verification time. Reusing a
+verification ID cannot refresh a deadline. Create/verify a new Phase 52 assurance
+for renewal and record its ID under the original governance anchor. A handoff
+requires fresh verification completed after the ownership change. Notes alone
+do not clear evidence or ownership findings.
+
+History retains original evidence, content differences, ownership changes and
+manual notes. Improvements separates recorded resolutions from current live
+findings. Reports may identify overdue/expired evidence while stored governance
+remains active, and exit zero with warnings. New journal records live only in
+the external workspace's `optimization/recovery-governance` directory. There is
+no automatic scheduling, remediation, recovery execution or deployment change.
+
+### Assurance operations and review cycles (Phase 54)
+
+Use `assurance-operations`, `assurance-findings`, `assurance-review-cycle
+ASSURANCE_ID` and `assurance-coverage` for read-only visibility into review
+operations, recurring findings, pending actions and coverage gaps. Coverage
+includes scenarios without assurance and assurance records without governance;
+it reports `covered`, `missing_owner`, `missing_schedule`, `expired` and
+`manual_actions`, plus verified scenarios, missing references and diagnostics.
+It produces no scores or rankings.
+
+Create an operation with `assurance-operation-create ASSURANCE_ID --owner OWNER
+--reason TEXT`. Explicitly record current findings with `assurance-operation-review
+OPERATION_ID --reason TEXT`. Every review retains a snapshot and links new,
+resolved, repeated and reopened findings. Repeated report reads never record
+observations or resolve findings. Missing evidence prevents implicit resolution.
+
+Use `assurance-operation-assign ID --owner OWNER --reason TEXT` for operations
+ownership, `assurance-operation-note ID --note TEXT --reason TEXT` for manual
+improvement notes, and `assurance-operation-transition ID STATE --reason TEXT`
+for lifecycle changes. States are `open`, `reviewing`, `improved`, `accepted` and
+terminal `closed`; see [Phase 54](phase54-developer-retrieval-recovery-operations.md)
+for allowed transitions. Improved requires a recorded clean review that is still
+current. Accepted records a human disposition without resolving open findings.
+
+The existing `assurance-improvements` report retains all Phase 53 fields and adds
+an `operations` object containing finding changes, notes and linked verification
+history. Renew evidence through existing assurance/governance commands, then
+explicitly record another operations review. Notes do not refresh evidence.
+
+All commands accept `--workspace PATH` and `--json`; mutations require `--reason`
+and accept `--actor` (default `developer`). Reports print JSON and exit zero with
+findings; inspect the payload. Records live only in the external workspace's
+`optimization/assurance-operations` directory. Nothing automatically repairs
+references, executes recovery, or changes deployments or prior-phase journals.
+
+### Recovery capability maturity (Phase 55)
+
+Read-only commands are `maturity-status`, `maturity-history MATURITY_ID`,
+`maturity-review AREA`, `maturity-readiness` and `maturity-plan`. They show stored
+levels, ownership, capability evidence/gaps, historical changes and improvement
+plans. Readiness returns `ready`, `needs_attention`, `missing_evidence` and
+`manual_actions`; it does not change levels or produce scores or rankings.
+
+Create a scoped area with `maturity-create AREA --assurance-id ASSURANCE_ID
+--owner OWNER --reason TEXT` (repeat `--assurance-id` for multiple existing
+governance anchors). Records start `initial`. Record a capability with
+`maturity-assess MATURITY_ID CAPABILITY --reason TEXT`, optionally repeating
+`--gap TEXT` and `--note TEXT`. Supported capabilities are `recovery-ownership`,
+`recovery-evidence-validation`, `recovery-review-cycle` and
+`recovery-improvement-planning`.
+
+Use `maturity-transition MATURITY_ID LEVEL --reason TEXT` for explicit adjacent
+changes through `initial`, `defined`, `managed`, `measured`, `improving`.
+Promotions require current gap-free assessments for the cumulative capabilities
+specified in [Phase 55](phase55-developer-retrieval-recovery-maturity.md).
+`measured` is qualitative reviewed evidence, not a numerical metric. Assigning
+ownership with `maturity-assign ID --owner OWNER --reason TEXT` requires the new
+owner to reassess before promotion. Readiness checks all four capabilities and
+can require attention even when the stored level remains high.
+
+Create a plan with `maturity-plan-add ID --improvement TEXT --capability NAME
+--reason TEXT`; repeat improvements/capabilities and optionally `--finding ID`.
+Finding links must belong to the scoped assurance anchors. Use `--supersedes
+PLAN_ID` to append a new version while preserving the old plan. Manually review
+with `maturity-plan-review ID PLAN_ID reviewed|deferred|completed --note TEXT
+--reason TEXT`. Completion requires a previously reviewed plan, current evidence
+and resolved linked findings. Completed plans remain immutable.
+
+All commands accept `--workspace PATH` and `--json`; mutations require `--reason`
+and accept `--actor` (default `developer`). Reports print JSON and exit zero even
+when gaps exist. Records live only in the external workspace's
+`optimization/maturity` directory. Assessments retain evidence snapshots and
+differences; no command rewrites previous plans, source evidence or prior journals,
+executes recovery, or automatically promotes maturity.
+
+
+### Phase 56: developer recovery assurance evolution
+
+The external developer workspace now supports manual evolution lifecycle, impact
+history and strategic planning. All reports below are read-only JSON and accept
+`--workspace PATH` and `--json`:
+
+- `prototype local evolution-status`
+- `prototype local evolution-history EVOLUTION_ID`
+- `prototype local evolution-impact EVOLUTION_ID`
+- `prototype local evolution-review EVOLUTION_ID`
+- `prototype local evolution-plan`
+
+Review returns `ready`, `warnings`, `missing_evidence`, `manual_actions` and current
+maturity impact. It never approves evolution, changes maturity or activates retrieval.
+Status groups planned, active (reviewing/approved/implemented), verified and retired
+work. Reports preserve historical evidence when current sources become unavailable.
+
+Explicit mutations require `--reason` and accept `--actor`:
+
+- `evolution-create CAPABILITY --owner OWNER [--change-type improvement]`
+- `evolution-impact-add EVOLUTION_ID --capability CAPABILITY --maturity-id MATURITY_ID [--finding ID] [--note TEXT] [--risk TEXT]`
+- `evolution-transition EVOLUTION_ID STATE --note TEXT`
+- `evolution-plan-add EVOLUTION_ID --owner OWNER --improvement TEXT --milestone TEXT [--dependency CAPABILITY] [--supersedes PLAN_ID]`
+
+Use these after `prototype local`, with `--workspace PATH`. Repeat impact list
+flags and plan improvement/dependency/milestone flags as needed. Affected capabilities
+use Phase 55 capability keys; linked findings must belong to the linked maturity
+scope. Approval and verification require current gap-free impact evidence and no
+unresolved risks. Implementation is an explicit human attestation. Plan revisions
+append records and preserve earlier owners, dependencies and review milestones.
+Dependencies and milestones are descriptive, not executable or scheduled.
+
+See [Phase 56 evolution management](phase56-developer-retrieval-recovery-evolution.md)
+for transitions, complete examples, evidence rules and limitations. This layer
+creates no scores or research metrics and changes no earlier runtime authority.
+
+
+### Phase 57: developer recovery strategic governance
+
+Read-only JSON reports (use `--json` for a single JSON object) accept `--workspace PATH`:
+
+- `prototype local governance-status`
+- `prototype local governance-history GOVERNANCE_ID`
+- `prototype local governance-review GOVERNANCE_ID`
+- `prototype local governance-dependencies`
+- `prototype local governance-plan-review`
+
+These expose strategic objectives, owners, roadmap progress, capability/evolution
+relationships, unresolved prerequisites, risks, review evidence and manual actions.
+They never approve, schedule, prioritize, resolve dependencies or execute changes.
+
+Explicit mutations after `prototype local` require `--reason` and accept `--actor`:
+
+- `governance-create OBJECTIVE --owner OWNER --capability LABEL [--evolution-id ID] [--dependency REF] [--note TEXT] [--risk TEXT]`
+- `governance-update GOVERNANCE_ID --objective TEXT --owner OWNER --capability LABEL` with the same optional list flags; lists replace the current revision.
+- `governance-record-review GOVERNANCE_ID --note TEXT`
+- `governance-transition GOVERNANCE_ID STATE --note TEXT`
+- `governance-roadmap-add GOVERNANCE_ID --description TEXT --owner OWNER --target-period TEXT [--dependency REF]`
+- `governance-roadmap-update GOVERNANCE_ID --roadmap-id ID --description TEXT --owner OWNER --target-period TEXT [--dependency REF]`
+- `governance-roadmap-transition GOVERNANCE_ID STATE --roadmap-id ID --note TEXT`
+- `governance-dependency-review GOVERNANCE_ID DEPENDENCY resolved|unresolved --note TEXT [--roadmap-id ID]`
+
+Objective states are planned, reviewing, approved, active, completed and retired.
+Roadmap states are proposed, scheduled, active, completed and deferred. Historical
+revisions, ownership, periods, links and decisions remain in the external journal.
+Approval, activation and completion require current recorded reviews. Completion
+also requires verified evolution links and completed roadmap work. Internal
+prerequisites use objective/roadmap IDs; other labels require explicit human review.
+All list flags may be repeated. No source or runtime state changes automatically.
+
+See [Phase 57 strategic governance](phase57-developer-retrieval-recovery-strategic-governance.md)
+for transition rules, dependencies, workflow examples, review gates and limitations.
+
+
+### Phase 58: developer strategic governance operations
+
+Read-only operational reports accept `--workspace PATH` and `--json`:
+
+- `prototype local governance-decisions`
+- `prototype local governance-actions`
+- `prototype local governance-exceptions`
+- `prototype local governance-decision DECISION_ID`
+- `prototype local governance-followup`
+- `prototype local governance-close-check`
+
+They expose decision ownership, actions, overdue work, exceptions, review history,
+closure evidence and manual follow-up. Expiry/overdue detection writes no state.
+Closure checks return passed, warnings, blocked and manual_actions, and never close
+records automatically. No command changes retrieval behavior or prioritizes work.
+
+Explicit mutations after `prototype local` require `--reason` and accept `--actor`:
+
+- `governance-decision-create GOVERNANCE_ID --decision TEXT --owner OWNER`
+- `governance-decision-review DECISION_ID --note TEXT [--evidence PATH] [--closure-reason TEXT]`
+- `governance-decision-transition DECISION_ID STATE --note TEXT`
+- `governance-decision-assign DECISION_ID --owner OWNER`
+- `governance-action-add DECISION_ID --description TEXT --owner OWNER --due-date YYYY-MM-DD`
+- `governance-action-transition DECISION_ID ACTION_ID STATE --note TEXT [--evidence PATH] [--closure-reason TEXT]`
+- `governance-action-defer DECISION_ID ACTION_ID --until YYYY-MM-DD --note TEXT`
+- `governance-action-assign DECISION_ID ACTION_ID --owner OWNER --due-date YYYY-MM-DD`
+- `governance-exception-add DECISION_ID --description TEXT --owner OWNER --expires-at TIMESTAMP [--action-id ACTION_ID]`
+- `governance-exception-transition DECISION_ID EXCEPTION_ID STATE --note TEXT [--evidence PATH] [--closure-reason TEXT]`
+- `governance-exception-assign DECISION_ID EXCEPTION_ID --owner OWNER`
+
+Evidence paths are relative to the external developer workspace; repeat `--evidence`
+for multiple files. Completion/cancellation, exception mitigation/closure and decision
+closure require evidence or a separate explicit manual closure rationale. Changed
+or missing referenced files remain visible. A current human review of the related
+strategic objective is required before deciding or closing. Documented deferrals
+and accepted unexpired exceptions permit closure with warnings; they remain tracked
+after closure. Strategic readiness warnings do not constitute strategic approval.
+
+See [Phase 58 governance operations](phase58-developer-retrieval-recovery-governance-operations.md)
+for lifecycles, time semantics, closure gates, handoffs, examples and limitations.
