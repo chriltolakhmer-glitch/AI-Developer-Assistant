@@ -586,6 +586,51 @@ class DeveloperModeTests(unittest.TestCase):
             self.assertTrue(any("deleted from current source" in cause for cause in deleted["likely_causes"]))
         self.assertFalse(self.research_root.exists())
 
+    def test_pilot_evidence_digest_preserves_legacy_bytes_with_bounded_memory(self):
+        import hashlib
+        import tracemalloc
+        from src.developer import reliability
+        evidence = {"records": [
+            {"note": "Evidence café ก governance " * 32,
+             "owner": "maintainer", "status": True, "optional": None,
+             "value": 1.25, "references": ["deployment-001", "review-001"]}
+            for _ in range(2048)
+        ]}
+        legacy_bytes = local_workflow._json_bytes(evidence)
+        expected = hashlib.sha256(legacy_bytes).hexdigest()
+        tracemalloc.start()
+        try:
+            actual = reliability._digest(evidence)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(expected, actual)
+        self.assertLess(peak, len(legacy_bytes) // 2,
+                        "Digest verification must not allocate another full evidence serialization")
+
+    def test_pilot_diagnosis_distinguishes_unselected_existing_file_from_deletion(self):
+        cases = self.root / "pilot-cases.json"
+        cases.write_text(json.dumps([{
+            "id": "session", "query": "configuration loading",
+            "expected": {"files": ["src/session.py"]},
+        }]), encoding="utf-8")
+        with patch("src.developer.local_workflow._embed_developer_chunks", self._embedding_stub):
+            indexed = self.developer.index(self.repository)
+        original = {p: p.read_bytes() for p in Path(indexed["index_path"]).rglob("*") if p.is_file()}
+        # An existing source file can be absent from a bounded result set.
+        with patch.object(local_workflow.DeveloperIndex, "query", return_value=[]):
+            present = self.developer.diagnose("session", cases, self.repository)
+            self.assertEqual("current", present["index_freshness"]["status"])
+            self.assertIn("expected file was not selected by this query: src/session.py", present["likely_causes"])
+            self.assertFalse(any("deleted" in cause for cause in present["likely_causes"]))
+            self.source_path.unlink()
+            deleted = self.developer.diagnose("session", cases, self.repository)
+            self.assertEqual("stale", deleted["index_freshness"]["status"])
+            self.assertIn("file was deleted from current source: src/session.py", deleted["likely_causes"])
+        for path, content in original.items():
+            self.assertEqual(content, path.read_bytes())
+        self.assertFalse(self.research_root.exists())
+
     def test_stability_and_run_case_explanation_are_developer_only(self):
         cases = self.root / "cases.json"
         cases.write_text(json.dumps([{

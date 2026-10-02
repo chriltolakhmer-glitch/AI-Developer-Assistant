@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 import tempfile
 
@@ -42,7 +43,19 @@ def _text(value):
 
 
 def _digest(value):
-    return hashlib.sha256(_json_bytes(value)).hexdigest()
+    # Preserve the journal's canonical bytes without materializing a second
+    # full JSON snapshot merely to verify its digest during read-only replay.
+    digest = hashlib.sha256()
+    buffer = bytearray()
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2, sort_keys=True)
+    for fragment in encoder.iterencode(value):
+        buffer.extend(fragment.encode("utf-8"))
+        if len(buffer) >= 65536:
+            digest.update(buffer)
+            buffer.clear()
+    buffer.extend(b"\n")
+    digest.update(buffer)
+    return digest.hexdigest()
 
 
 def _report():

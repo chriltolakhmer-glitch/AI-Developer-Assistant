@@ -926,8 +926,6 @@ class DeveloperWorkspace:
                     likely_causes.append(f"file excluded from the local Python index: {value} ({decision['reason']})")
                 elif value in parse_failures:
                     likely_causes.append(f"file could not be parsed: {value}")
-                elif value in old_state.get("file_hashes", {}):
-                    likely_causes.append(f"file was deleted from current source: {value}")
                 else:
                     likely_causes.append(f"expected file was not selected by this query: {value}")
             elif item["type"] == "symbol":

@@ -1066,3 +1066,48 @@ existing readiness record. Create a record first when no readiness history exist
 
 See [Phase 59 operational readiness](phase59-developer-retrieval-operational-readiness.md)
 for linkage verification, warning/blocking rules, freshness, isolation and limits.
+
+## Phase 60: real repository pilot
+
+Use authorized repositories and a fresh external developer workspace. Scan and
+inspect before indexing, then run representative queries, trace, context analysis,
+diagnose and developer evaluation/regression against declared navigation cases.
+Keep all cases, indexes and operational evidence outside the project checkout.
+No pilot source modification or research/benchmark registration is implied.
+
+```powershell
+$pilotWorkspace = 'C:\DeveloperPilot\workspace'
+$pilotRepository = 'C:\AuthorizedRepositories\python-app'
+$pilotCases = 'C:\DeveloperPilot\cases.json'
+prototype local scan $pilotRepository --workspace $pilotWorkspace
+prototype local inspect $pilotRepository --workspace $pilotWorkspace
+prototype local index $pilotRepository --workspace $pilotWorkspace
+prototype local trace "Where is configuration loaded?" --repository $pilotRepository --workspace $pilotWorkspace --json
+prototype local evaluate $pilotRepository --cases $pilotCases --stability --explain --workspace $pilotWorkspace --json
+prototype local regression $pilotRepository --cases $pilotCases --baseline pilot-v1 --create-baseline --workspace $pilotWorkspace --json
+```
+
+Replace the example paths with authorized local inputs and supply the pinned
+developer model cache. Use a new baseline name for a new immutable capture.
+
+`local diagnose` distinguishes an existing file absent from results from a file
+deleted since indexing. Inspect reports token-limit exclusions; an indexed
+repository can still contain unsearchable symbols. TypeScript-only repositories
+cannot complete Python indexing or retrieval.
+
+Optimization validation runs checks without approving a candidate. Failed gates
+require manual investigation or rejection; do not bypass them to demonstrate a
+deployment. Promotion requires the existing current approval and evidence. Do not
+activate configurations, deploy, recover or close readiness automatically.
+Readiness reports can exit zero while reporting blockers. Evidence capture,
+follow-up and closure require an existing eligible readiness record; missing
+history is not repaired by these commands.
+
+Developer evidence digest verification preserves the existing canonical SHA-256
+contract while hashing incrementally. Large lifecycle histories still need memory
+for loading and replay. Run broad validation suites sequentially on constrained
+hosts; retain terminal results and distinguish resource failures from gate findings.
+
+See [Phase 60 pilot findings and limitations](phase60-developer-real-repository-pilot.md)
+for real retrieval evidence, the diagnostic correction, failed candidate, and the
+distinction between synthetic lifecycle coverage and real-pilot closure.
