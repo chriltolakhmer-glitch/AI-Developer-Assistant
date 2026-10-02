@@ -73,7 +73,7 @@ class DeveloperModeTests(unittest.TestCase):
         return result.stdout.strip()
 
     @staticmethod
-    def _embedding_stub(chunks, _model_cache):
+    def _embedding_stub(chunks, _model_cache, *, parsed=None):
         rows = []
         for chunk in sorted(chunks, key=lambda item: item.chunk_id):
             metadata = asdict(chunk)
@@ -225,9 +225,9 @@ class DeveloperModeTests(unittest.TestCase):
             first = self.developer.index(self.repository)
         original = self._embedding_stub
         seen = []
-        def embed(chunks, cache):
+        def embed(chunks, cache, *, parsed=None):
             seen.extend(c.file_path for c in chunks)
-            return original(chunks, cache)
+            return original(chunks, cache, parsed=parsed)
         other.write_text("def connect_database():\n    return 'new connection'\n", encoding="utf-8")
         with patch("src.developer.local_workflow._embed_developer_chunks", side_effect=embed):
             second = self.developer.index(self.repository)
@@ -461,7 +461,9 @@ class DeveloperModeTests(unittest.TestCase):
         self.assertGreater(exact_first["ranking_reason"]["symbol_factor"], 1.0)
         self.assertEqual(exact["results"], repeated["results"])
         token_issue = next(row for row in dependency["results"] if row["qualified_name"] == "TokenManager.issue")
-        self.assertIn("format_token", {item["symbol_name"] for item in token_issue["related_context"]})
+        self.assertIn("format_token", {item["symbol"] for item in token_issue["relationship_references"]})
+        self.assertIn("format_token", {item["qualified_name"] for item in dependency["results"]}
+                      | {item["symbol_name"] for row in dependency["results"] for item in row["related_context"]})
         # A tied candidate may already be excluded by an overlapping module range;
         # suppression event counts are therefore not an invariant of this query.
         self.assertEqual(len(analysis["duplicate_context"]), analysis["duplicate_context_count"])
@@ -729,9 +731,9 @@ class DeveloperModeTests(unittest.TestCase):
         self.assertFalse(self.research_root.exists())
 
     def test_source_edit_during_indexing_does_not_publish(self):
-        def embed(chunks, cache):
+        def embed(chunks, cache, *, parsed=None):
             self.source_path.write_text("def changed():\n    return 5\n")
-            return self._embedding_stub(chunks, cache)
+            return self._embedding_stub(chunks, cache, parsed=parsed)
         with patch("src.developer.local_workflow._embed_developer_chunks", side_effect=embed):
             with self.assertRaisesRegex(LocalWorkflowError, "changed during indexing"):
                 self.developer.index(self.repository)
@@ -758,7 +760,7 @@ class DeveloperModeTests(unittest.TestCase):
             ("tests/test_routes.py", "function", 1, 10),
         ], 1):
             metadata = EmbeddingMetadata("local/fixture", "a" * 40, path, kind,
-                                         "api_routes", start, end, "b" * 64, 10)
+                                         f"api_routes_{start}", start, end, f"{start:064x}", 10)
             rows.append(SearchResult(str(rank), rank, 1.0, metadata, "bm25"))
         result = rank_developer_results("tests for API routes", (), rows, 10)
         self.assertTrue(all(r["ranking_reason"]["test_factor"] == 1.0 for r in result))
@@ -929,7 +931,8 @@ class DeveloperModeTests(unittest.TestCase):
         transition_candidate(self.developer, candidate["id"], "experimenting", "begin reviewed experiment")
         validation = _write(self.developer, _storage(self.developer, candidate["id"]) / "validations" / "review-test.json", {
             "id": "review-test", "candidate_id": candidate["id"], "before": "default", "after": "review-history",
-            "gates": {name: True for name in ("regression_cases", "stability", "ranking_review",
+            "gates": {name: True for name in ("regression_cases", "context_completeness",
+                                               "declared_context", "stability", "ranking_review",
                                                "duplicate_context", "trace_compatibility", "diagnose_compatibility")},
             "passed": True, "ranking_notes": {}, "compatibility": [], "comparison": {"comparisons": []},
             "status": "validated"})
@@ -968,7 +971,7 @@ class DeveloperModeTests(unittest.TestCase):
             self.assertEqual(0, status)
             result = json.loads(output.getvalue())
             self.assertTrue(result["passed"], result)
-            self.assertEqual(6, len(result["gates"]))
+            self.assertEqual(8, len(result["gates"]))
             research.assert_not_called()
         decision = decide_candidate(self.developer, candidate["id"], "accepted", "No-op compatibility control passed")
         self.assertEqual(result["id"], decision["validation_id"])
@@ -1010,6 +1013,9 @@ class DeveloperModeTests(unittest.TestCase):
         record["context"]["expanded_symbols"] = [
             {"file_path": "extra.py", "symbol_name": "extra"},
             {"file_path": "extra.py", "symbol_name": "extra"}]
+        record["context"]["included_context"] = [
+            {"file_path": "extra.py", "symbol_name": "extra", "origin": "relationship"},
+            {"file_path": "extra.py", "symbol_name": "extra", "origin": "relationship"}]
         changed_path = Path(baseline["baseline_path"]).with_name("changed.json")
         changed_path.write_text(json.dumps(changed), encoding="utf-8")
         difference = compare_versions(self.developer, "default", "changed")["comparisons"][0]
@@ -1480,7 +1486,7 @@ class DeveloperModeTests(unittest.TestCase):
         self.assertEqual("candidate", shown["history"][1]["status"])
         self.assertIsNone(shown["history"][1]["reason"])
         self.assertEqual(["attempt-two"], show_candidates(self.developer)["unresolved_candidates"])
-        with self.assertRaisesRegex(LocalWorkflowError, "previously rejected"):
+        with self.assertRaisesRegex(LocalWorkflowError, "rejected or failed"):
             create_candidate(self.developer, "attempt-three", "gap", candidate["cases"], candidate["source"],
                              "change", "check", supersedes="attempt-two")
 
@@ -3366,7 +3372,7 @@ class DeveloperModeTests(unittest.TestCase):
         self.assertFalse(any(item["behavior_changed"] for item in report["comparisons"]))
         self.assertNotEqual(created["history_id"], report["history_id"])
         history = json.loads(Path(report["history_path"]).read_text(encoding="utf-8"))
-        self.assertEqual("developer-navigation-v2", history["snapshot"]["retrieval_version"])
+        self.assertEqual("developer-navigation-v6", history["snapshot"]["retrieval_version"])
         self.assertEqual(["session"], history["report"]["query_cases"])
         self.assertEqual(3, len(list(Path(report["history_path"]).parent.glob("*.json"))))
         for forbidden in ("quality_score", "noise_rate", "context_completeness", '"score":'):
@@ -3510,6 +3516,49 @@ class DeveloperModeTests(unittest.TestCase):
         selected = rank_developer_results("format_token", (), rows, 10, context)
         self.assertEqual(1, len(selected))
         self.assertEqual(1, len(selected[0]["ranking_reason"]["duplicate_suppressed"]))
+
+    def test_explicit_relationship_target_survives_unrelated_duplicate_suppression(self):
+        from src.developer.ranking import rank_developer_results
+        from src.models.embedding import EmbeddingMetadata
+        from src.models.retrieval_result import SearchResult
+
+        paths = ["src/legacy/formatting.py", "src/auth/token.py"] + [
+            f"src/noise/module_{index}.py" for index in range(48)
+        ] + ["src/utils/formatting.py"]
+        symbols = ["format_token", "TokenManager.issue"] + [
+            f"noise_{index}" for index in range(47)
+        ] + ["format_token"]
+        rows = [SearchResult(
+            f"chunk-{rank}", rank, 1.0,
+            EmbeddingMetadata("local/fixture", "a" * 40, path, "function", symbol,
+                              1, 2, "b" * 64 if symbol == "format_token" else f"{rank:064x}", 10),
+            "bm25",
+        ) for rank, (path, symbol) in enumerate(zip(paths, symbols), start=1)]
+        context = {
+            "chunk-1": {"content_sha256": "b" * 64, "symbol_name": "format_token",
+                        "source_region": "src/legacy/formatting.py:1-2", "related_chunk_ids": []},
+            "chunk-2": {"content_sha256": "c" * 64, "symbol_name": "TokenManager.issue",
+                        "source_region": "src/auth/token.py:1-2", "related_chunk_ids": ["chunk-51"],
+                        "relationship_edges": [{"symbol": "format_token",
+                                                 "file_path": "src/utils/formatting.py",
+                                                 "kind": "call_relationship"}]},
+            "chunk-51": {"content_sha256": "b" * 64, "symbol_name": "format_token",
+                         "source_region": "src/utils/formatting.py:1-2", "related_chunk_ids": [],
+                         "relationship_edges": [{"symbol": "TokenManager.issue",
+                                                  "file_path": "src/auth/token.py",
+                                                  "kind": "caller_relationship"}]},
+        }
+
+        selected = rank_developer_results(
+            "Where does TokenManager.issue format a login token?", (), rows, 3, context
+        )
+
+        selected_files = {row["file_path"] for row in selected}
+        expanded_files = {item["file_path"] for row in selected for item in row["related_context"]}
+        self.assertIn("src/utils/formatting.py", selected_files | expanded_files)
+        self.assertNotIn("src/legacy/formatting.py", selected_files | expanded_files)
+        source = next(row for row in selected if row["qualified_name"] == "TokenManager.issue")
+        self.assertEqual(1, len(source["ranking_reason"]["duplicate_suppressed"]))
 
     def test_cli_help_separates_modes_and_local_demo_runs(self):
         with self.assertRaises(SystemExit) as raised, redirect_stdout(StringIO()) as output:
@@ -5081,6 +5130,247 @@ class DeveloperModeTests(unittest.TestCase):
                 r.history(self.developer, identifier)
         path.write_bytes(original)
         self.assertEqual(record, r.history(self.developer, identifier)["record"])
+
+
+    def test_phase61_configuration_excerpts_and_omission_diagnostics(self):
+        from src.developer.context import bound_configuration
+        settings = self.repository / "settings.py"
+        settings.write_text("class Settings:\n    def __init__(self):\n" +
+                            "".join(f"        self.VALUE_{i} = 'configuration value {i}'\n" for i in range(200)), encoding="utf-8")
+        parsed = local_workflow.parse_local_repository(self.repository)
+        bounded = bound_configuration(parsed, FakeTokenizer())
+        originals = {(c.file_path, c.qualified_name): c for c in parsed.chunks}
+        for chunk in bounded.chunks:
+            if chunk.file_path != "settings.py":
+                continue
+            budget = bounded.context[chunk.chunk_id]["context_budget"]
+            self.assertTrue(budget["oversized"])
+            self.assertEqual("truncated", budget["status"])
+            self.assertLessEqual(budget["retained_token_count"], 256)
+            original = originals[(chunk.file_path, chunk.qualified_name)]
+            self.assertTrue(original.content.startswith(chunk.content))
+            self.assertGreater(budget["omitted_lines"][1], budget["omitted_lines"][0])
+            self.assertEqual(original.qualified_name, chunk.qualified_name)
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()):
+            self.developer.index(self.repository)
+            inspection = self.developer.inspect(self.repository)
+            result = self.developer.query("Settings.__init__ configuration", self.repository)
+            analysis = self.developer.analyze_context("Settings.__init__ configuration", self.repository)
+        self.assertGreater(inspection["chunk_counts"]["bounded"], 0)
+        self.assertEqual("developer-local-index-v4", inspection["index_schema_version"])
+        self.assertTrue(result["context"]["budget_diagnostics"])
+        self.assertTrue(analysis["budget_diagnostics"])
+        visible_symbols = {row["qualified_name"] for row in result["results"]}
+        visible_symbols.update(item["symbol_name"] for row in result["results"]
+                       for item in row["related_context"])
+        self.assertIn("Settings.__init__", visible_symbols)
+        self.assertIn("VALUE_199", settings.read_text(encoding="utf-8"))
+        settings.write_text("HUGE = '" + "word " * 500 + "'\n", encoding="utf-8")
+        omitted = bound_configuration(local_workflow.parse_local_repository(self.repository), FakeTokenizer())
+        self.assertTrue(any(d.get("context_budget", {}).get("status") == "omitted" for d in omitted.context.values()))
+
+    def test_phase61_duplicate_and_undeclared_expansion_controls(self):
+        from src.developer.ranking import rank_developer_results
+        from src.models.embedding import EmbeddingMetadata
+        from src.models.retrieval_result import SearchResult
+        specifications = [("a", "auth.py", "login", "1"), ("b", "auth.py", "login", "2"),
+                          ("c", "copy.py", "alias", "1"), ("d", "routes.py", "route", "4")]
+        rows = [SearchResult(i, n + 1, 1., EmbeddingMetadata("local/test", "a" * 40, p, "function", s,
+                     n * 10 + 1, n * 10 + 2, h * 64, 10), "bm25")
+                for n, (i, p, s, h) in enumerate(specifications)]
+        context = {i: {"symbol_name": s, "source_region": p + ":1-2", "content_sha256": h * 64,
+                       "related_chunk_ids": ["dep", "bad", "copy-dep"],
+                       "relationship_edges": [{"symbol": "verify", "file_path": "dependency.py", "kind": "call_relationship"},
+                                              {"symbol": "verify_copy", "file_path": "copy_dep.py", "kind": "import_relationship"}]}
+                   for i, p, s, h in specifications}
+        for i, p, symbol, digest in [("dep", "dependency.py", "verify", "5"),
+                                     ("bad", "unrelated.py", "unknown", "6"),
+                                     ("copy-dep", "copy_dep.py", "verify_copy", "5")]:
+            context[i] = {"symbol_name": symbol, "source_region": p + ":1-2", "content_sha256": digest * 64}
+        selected = rank_developer_results("login route", (), rows, 10, context)
+        self.assertEqual(2, len(selected))
+        expanded = [r for row in selected for r in row["related_context"]]
+        self.assertEqual(1, len(expanded))
+        self.assertIn(expanded[0]["symbol_name"], {"verify", "verify_copy"})
+        omissions = [r for row in selected for r in row["context_omissions"]]
+        self.assertTrue(any(r["file_path"] == "unrelated.py" and r["reason"] == "undeclared relationship" for r in omissions))
+        self.assertTrue(any(r["reason"] == "duplicate symbol or content" for r in omissions))
+
+    def test_phase61_relationship_boost_requires_specific_evidence(self):
+        from src.developer.ranking import rank_developer_results
+        from src.models.embedding import EmbeddingMetadata
+        from src.models.retrieval_result import SearchResult
+
+        def result(chunk_id, file_path, symbol):
+            return SearchResult(chunk_id, 1, 1.0,
+                EmbeddingMetadata("local/test", "a" * 40, file_path, "function", symbol,
+                                  1, 2, chunk_id.ljust(64, "0")[:64], 4), "bm25")
+
+        unrelated_context = {"api": {"symbol_name": "root", "source_region": "backend/api/main.py:1-2",
+            "relationship_edges": [{"symbol": "backend.api.main", "file_path": "backend/api/main.py",
+                                    "kind": "caller_relationship"}]}}
+        unrelated = rank_developer_results("Where is authentication checked in API requests?", (),
+            [result("api", "backend/api/main.py", "root")], 1, unrelated_context,
+            {"relationship_factor": 1.5})
+        self.assertEqual([], unrelated[0]["ranking_reason"]["matching_relationships"])
+        self.assertEqual(1.0, unrelated[0]["ranking_reason"]["relationship_factor"])
+
+        exact_context = {"cache": {"symbol_name": "CacheManager.get",
+            "source_region": "backend/retrieval/cache.py:1-2",
+            "relationship_edges": [{"symbol": "CacheManager._get_cache_path",
+                                    "file_path": "backend/retrieval/cache.py",
+                                    "kind": "call_relationship"}]}}
+        exact = rank_developer_results("What calls CacheManager.get and which cache path does it use?", (),
+            [result("cache", "backend/retrieval/cache.py", "CacheManager.get")], 1, exact_context,
+            {"relationship_factor": 1.5})
+        self.assertEqual(1.5, exact[0]["ranking_reason"]["relationship_factor"])
+        self.assertIn("CacheManager._get_cache_path", exact[0]["ranking_reason"]["matching_relationships"])
+
+    def test_phase61_utility_query_matches_utils_path_alias(self):
+        from src.developer.ranking import _terms
+        self.assertIn("utils", _terms("Where is the format_token utility used?"))
+
+    def test_phase61_active_ranking_factor_changes_are_not_explanation_loss(self):
+        from src.developer.optimization import _explanation_lost
+        self.assertFalse(_explanation_lost(
+            {"ranking_factors": ["file_diversity", "semantic_candidate_match"]},
+            {"ranking_factors": ["semantic_candidate_match"]},
+        ))
+        self.assertTrue(_explanation_lost(
+            {"relationship_path": [{"from": "caller", "to": "dependency"}]},
+            {"relationship_path": []},
+        ))
+
+    def test_phase61_relationships_require_file_identity(self):
+        (self.repository / "dependency.py").write_text("def verify():\n    return True\n", encoding="utf-8")
+        (self.repository / "unrelated.py").write_text("def verify():\n    return False\n", encoding="utf-8")
+        self.source_path.write_text("from dependency import verify\ndef login():\n    return verify()\n", encoding="utf-8")
+        parsed = local_workflow.parse_local_repository(self.repository)
+        details = next(d for d in parsed.context.values() if d["symbol_name"] == "login")
+        targets = {e["file_path"] for e in details["relationship_edges"]}
+        self.assertIn("dependency.py", targets)
+        self.assertNotIn("unrelated.py", targets)
+        unrelated = next(d for d in parsed.context.values() if d["source_region"].startswith("unrelated.py") and d["symbol_name"] == "verify")
+        self.assertFalse(unrelated["relationship_edges"])
+
+    def test_phase61_ambiguous_same_name_relationship_is_unresolved(self):
+        (self.repository / "first.py").write_text("def verify():\n    return True\n", encoding="utf-8")
+        (self.repository / "second.py").write_text("def verify():\n    return False\n", encoding="utf-8")
+        self.source_path.write_text(
+            "from first import verify as first_verify\n"
+            "from second import verify as second_verify\n"
+            "from first import verify\n"
+            "from second import verify\n"
+            "def login():\n    return verify()\n",
+            encoding="utf-8",
+        )
+        parsed = local_workflow.parse_local_repository(self.repository)
+        details = next(item for item in parsed.context.values() if item["symbol_name"] == "login")
+        self.assertFalse(any(edge["kind"] == "call_relationship" for edge in details["relationship_edges"]))
+        diagnostic = next(item for item in details["relationship_diagnostics"]
+                          if item["symbol"] == "verify" and item["kind"] == "call_relationship")
+        self.assertEqual("ambiguous", diagnostic["status"])
+        self.assertEqual({"first.py:verify", "second.py:verify"}, set(diagnostic["candidates"]))
+
+    def test_phase61_index_v4_rejects_legacy_schema(self):
+        self._optimization_setup()
+        active_path = next((self.workspace_path / "indexes").glob("*/v4/active.json"))
+        active = json.loads(active_path.read_text(encoding="utf-8"))
+        index_path = active_path.parent / active["snapshot_id"]
+        manifest_path = index_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual("developer-local-index-v4", manifest["schema_version"])
+        manifest["schema_version"] = "developer-local-index-v3"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(LocalWorkflowError, "Unsupported developer index"):
+            local_workflow.DeveloperIndex.load(index_path)
+
+    def test_phase61_large_evidence_replay_preserves_identity_and_bytes(self):
+        import hashlib
+        import tracemalloc
+        from src.developer import reliability as r
+        self.developer._prepare()
+        directory = r._root(self.developer)
+        directory.mkdir(parents=True)
+        event = {"mode": r.MODE, "schema_version": 1, "sequence": 1, "previous_digest": None,
+                 "action": "readiness-create", "identifier": "readiness-001", "reason": "synthetic evidence",
+                 "actor": "developer", "created_at": "2026-10-02T00:00:00+00:00",
+                 "deployment_snapshot": {"deployment_id": "deployment-001", "configuration": {"settings": {}},
+                                         "history": [{"sequence": i, "note": "synthetic evidence " * 32} for i in range(8192)]}}
+        raw = local_workflow._json_bytes(event)
+        path = directory / "00000001.json"
+        path.write_bytes(raw)
+        tracemalloc.start()
+        try:
+            state = r._load(self.developer)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, len(raw) * 4)
+        self.assertIs(state["events"][0]["deployment_snapshot"], state["readiness"][0]["deployment_snapshot"])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), r._digest(state["events"][0]))
+        self.assertEqual(raw, path.read_bytes())
+        # Each load owns its evidence; mutating a returned view cannot rewrite disk or a later read.
+        state["readiness"][0]["deployment_snapshot"]["history"][0]["note"] = "caller mutation"
+        self.assertEqual(event["deployment_snapshot"], r._load(self.developer)["readiness"][0]["deployment_snapshot"])
+        event["previous_digest"] = "corrupt"
+        path.write_bytes(local_workflow._json_bytes(event))
+        with self.assertRaises(LocalWorkflowError):
+            r._load(self.developer)
+
+    def test_phase61_successor_preserves_failed_pending_review_and_reenters(self):
+        from src.developer import optimization as o, governance as g, review as r
+        cases, baseline, candidate = self._optimization_setup()
+        g.register_candidate(self.developer, candidate["id"], "owner", "investigate", candidate["cases"])
+        g.transition_candidate(self.developer, candidate["id"], "experimenting", "validate")
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()), patch.object(self.developer, "trace", return_value={}):
+            failed = o.validate_candidate(self.developer, candidate["id"], self.repository, cases, "default")
+        self.assertFalse(failed["passed"])
+        old_review = r.create_review(self.developer, candidate["id"], "record failure")
+        prior = {p: p.read_bytes() for p in self.workspace_path.rglob("*.json")}
+        successor = o.create_candidate(self.developer, "remediation-v2", "repair trace compatibility", candidate["cases"],
+                                       candidate["source"], "bounded declared context", "all retrieval and lifecycle gates",
+                                       supersedes=candidate["id"], owner="owner", purpose="bounded declared context")
+        self.assertEqual(candidate["id"], successor["source_candidate"])
+        self.assertEqual("owner", successor["owner"])
+        self.assertTrue(successor["recorded_at"])
+        self.assertEqual("bounded declared context", successor["purpose"])
+        self.assertEqual(candidate["cases"], successor["affected_cases"])
+        self.assertEqual("repair trace compatibility", successor["remediation_reason"])
+        g.register_candidate(self.developer, successor["id"], "owner", "remediate", successor["cases"])
+        g.transition_candidate(self.developer, successor["id"], "experimenting", "revalidate")
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()):
+            passed = o.validate_candidate(self.developer, successor["id"], self.repository, cases, "default")
+        self.assertTrue(passed["passed"], passed["gates"])
+        g.transition_candidate(self.developer, successor["id"], "validated", "gates passed", last_validation_at=passed["recorded_at"])
+        new_review = r.create_review(self.developer, successor["id"], "human review only", conflict_note="Successor of failed pending experiment; original preserved.")
+        self.assertEqual("pending", new_review["status"])
+        self.assertEqual("pending", old_review["status"])
+        shown = o.show_candidates(self.developer, successor["id"])["candidates"][0]
+        self.assertEqual(2, len(shown["history"]))
+        self.assertEqual("failed", shown["history"][0]["validation_outcome"])
+        self.assertEqual(candidate["id"], new_review["source_candidate"])
+        self.assertEqual("bounded declared context", new_review["purpose"])
+        self.assertTrue(new_review["validation_evidence"])
+        for path, content in prior.items():
+            self.assertEqual(content, path.read_bytes())
+        self.assertFalse((self.workspace_path / "optimization" / "promotions").exists())
+        policy = r.policy_check(self.developer, successor["id"])
+        self.assertNotEqual("blocked", policy["candidate_results"][0]["status"])
+
+    def test_phase61_incomplete_baseline_cannot_pass_regression_gate(self):
+        from src.developer import optimization as o
+        cases, _, candidate = self._optimization_setup()
+        data = json.loads(cases.read_text(encoding="utf-8"))
+        data[0]["expected"]["symbols"].append("missing_required_symbol")
+        cases.write_text(json.dumps(data), encoding="utf-8")
+        with patch("src.developer.local_workflow.load_model", return_value=self._query_model()):
+            self.developer.regression(self.repository, cases, baseline="incomplete", create_baseline=True)
+            result = o.validate_candidate(self.developer, candidate["id"], self.repository, cases, "incomplete")
+        self.assertFalse(result["gates"]["context_completeness"])
+        self.assertIn("missing_required_symbol", result["context_checks"][0]["missing_evidence"]["symbols"])
+        with self.assertRaises(LocalWorkflowError):
+            o.decide_candidate(self.developer, candidate["id"], "accepted", "cannot bypass missing evidence")
 
 
 if __name__ == "__main__":

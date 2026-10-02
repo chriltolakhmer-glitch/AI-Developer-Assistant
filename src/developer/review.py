@@ -118,11 +118,22 @@ def create_review(workspace, candidate_id, reason, owner="developer", affected_c
     lifecycle, findings, health = _candidate_context(workspace, candidate)
     review_id = f"review-{uuid4().hex}"
     created_at = datetime.now(timezone.utc).isoformat()
+    lineage = deepcopy(candidate["history"])
+    validations = deepcopy(candidate["validations"])
     item = {
         "review_id": review_id, "candidate_id": candidate_id, "sequence": 1,
         "status": "pending", "owner": owner.strip(), "reviewer": None,
         "reason": reason.strip(), "conflict_note": conflict_note.strip() if conflict_note else None,
         "affected_cases": cases, "created_at": created_at,
+        "source_candidate": candidate.get("source_candidate", candidate.get("supersedes")),
+        "purpose": candidate.get("purpose"),
+        "remediation_reason": candidate.get("remediation_reason"),
+        "changed_behavior": candidate.get("changed_behavior", candidate.get("proposed_change")),
+        "validation_requirements": candidate.get("validation_requirements", candidate.get("validation_method")),
+        "candidate_owner": candidate.get("owner"),
+        "candidate_recorded_at": candidate.get("recorded_at"),
+        "validation_evidence": validations,
+        "lineage_evidence": lineage,
         "validation_summary": _validation_summary(candidate),
         "governance_health_status": health["health_status"],
         "related_candidate_history": deepcopy(candidate["history"]),

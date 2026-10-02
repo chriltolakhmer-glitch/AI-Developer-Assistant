@@ -5,14 +5,30 @@ from pathlib import PurePosixPath
 
 from src.retrieval.rrf import CANDIDATE_WINDOW, fuse_rankings
 
-RANKING_VERSION = "developer-navigation-v2"
+RANKING_VERSION = "developer-navigation-v6"
 _STOP = frozenset("where is are the a an how what which do does from for to of in and created defined implemented loaded handled".split())
-_ALIASES = {"configuration": "config", "authentication": "auth", "connections": "connection", "routes": "route"}
+_ALIASES = {"configuration": "config", "authentication": "auth", "connections": "connection",
+            "routes": "route", "utility": "utils"}
+_GENERIC_RELATIONSHIP_TERMS = _STOP | frozenset(
+    "api backend cache code get init load main query run save set store test tests vector".split())
 
 
 def _terms(text):
     text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
     return {_ALIASES.get(word, word) for word in re.findall(r"[a-z0-9]+", text.casefold()) if word not in _STOP}
+
+
+def _relationship_matches(symbol, question, query_terms):
+    meaningful = (_terms(symbol) & query_terms) - _GENERIC_RELATIONSHIP_TERMS
+    if len(meaningful) >= 2:
+        return True
+    components = [part for part in re.split(r"[.:]", symbol) if part]
+    return any(
+        bool(_terms(component) - _GENERIC_RELATIONSHIP_TERMS)
+        and bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(component)}(?![A-Za-z0-9_])",
+                           question, flags=re.IGNORECASE))
+        for component in components
+    )
 
 
 def rank_developer_results(question, dense, lexical, top_k, context=None, settings=None):
@@ -44,13 +60,7 @@ def rank_developer_results(question, dense, lexical, top_k, context=None, settin
         relationship_edges = (context or {}).get(result.chunk_id, {}).get("relationship_edges", [])
         matching_relationships = sorted({
             edge.get("symbol", "") for edge in relationship_edges
-            if edge.get("symbol") and (
-                _terms(edge["symbol"]) & query_terms
-                or bool(re.search(
-                    rf"(?<![A-Za-z0-9_]){re.escape(edge['symbol'])}(?![A-Za-z0-9_])",
-                    question, flags=re.IGNORECASE,
-                ))
-            )
+            if edge.get("symbol") and _relationship_matches(edge["symbol"], question, query_terms)
         })
         relationship_factor = (settings or {}).get("relationship_factor", 1.25) if matching_relationships else 1.0
         file_factor = 1 + 0.10 * min(len(path_terms), 3)
@@ -87,17 +97,48 @@ def rank_developer_results(question, dense, lexical, top_k, context=None, settin
         })
         ranked.append(row)
     ranked.sort(key=lambda row: (-row["score"], row["chunk_id"]))
+    # Prefer a duplicate candidate that is an explicitly resolved dependency of
+    # a query-relevant result. Otherwise an unrelated copy can win on raw rank
+    # and suppress the real relationship target during context expansion.
+    context_by_id = context or {}
+    duplicate_counts = {}
+    for details in context_by_id.values():
+        digest = details.get("content_sha256")
+        if digest:
+            duplicate_counts[digest] = duplicate_counts.get(digest, 0) + 1
+    preferred_by_digest = {}
+    preferred_source_by_digest = {}
+    for source in ranked:
+        reason = source["ranking_reason"]
+        if not (reason["exact_symbol_match"] or reason["matched_metadata_terms"]):
+            continue
+        for target_id in source["developer_context"].get("related_chunk_ids", []):
+            target = context_by_id.get(target_id, {})
+            digest = target.get("content_sha256")
+            if digest and duplicate_counts.get(digest, 0) > 1:
+                preferred_by_digest.setdefault(digest, target_id)
+                preferred_source_by_digest.setdefault(digest, source["chunk_id"])
     selected = []
     selected_signatures = {}
+    selected_content = {}
+    suppressed_by_digest = {}
     while ranked and len(selected) < top_k:
         remaining = []
         for row in ranked:
-            signature = (row["qualified_name"], row["developer_context"].get("content_sha256"))
-            duplicate_owner = selected_signatures.get(signature) if signature[1] else None
-            if duplicate_owner is not None and duplicate_owner["file_path"] != row["file_path"]:
+            signature = (row["file_path"], row["qualified_name"])
+            digest = row["developer_context"].get("content_sha256")
+            preferred_id = preferred_by_digest.get(digest) if digest else None
+            if preferred_id is not None and row["chunk_id"] != preferred_id:
+                suppressed_by_digest.setdefault(digest, []).append({
+                    "file_path": row["file_path"], "chunk_id": row["chunk_id"],
+                    "reason": "unrelated duplicate suppressed in favor of explicit relationship target",
+                })
+                continue
+            duplicate_owner = selected_signatures.get(signature) or (selected_content.get(digest) if digest else None)
+            if duplicate_owner is not None:
                 duplicate_owner["ranking_reason"].setdefault("duplicate_suppressed", []).append({
                     "file_path": row["file_path"], "chunk_id": row["chunk_id"],
-                    "reason": "same symbol and source content already selected",
+                    "reason": "same file/symbol or identical content already selected",
                 })
                 continue
             same_file = [s for s in selected if s["file_path"] == row["file_path"]]
@@ -113,46 +154,62 @@ def rank_developer_results(question, dense, lexical, top_k, context=None, settin
         chosen, *ranked = remaining
         chosen["rank"] = len(selected) + 1
         selected.append(chosen)
-        signature = (chosen["qualified_name"], chosen["developer_context"].get("content_sha256"))
-        if signature[1]:
-            selected_signatures.setdefault(signature, chosen)
+        selected_signatures[(chosen["file_path"], chosen["qualified_name"])] = chosen
+        digest = chosen["developer_context"].get("content_sha256")
+        if digest:
+            selected_content[digest] = chosen
+    selected_by_id = {row["chunk_id"]: row for row in selected}
+    for digest, suppressed in suppressed_by_digest.items():
+        target_id = preferred_by_digest[digest]
+        source_id = preferred_source_by_digest[digest]
+        owner = selected_by_id.get(source_id) or next((
+            row for row in selected
+            if target_id in row["developer_context"].get("related_chunk_ids", [])
+        ), None)
+        if owner is not None:
+            owner["ranking_reason"].setdefault("duplicate_suppressed", []).extend(suppressed)
+    seen_symbols = set(selected_signatures)
+    seen_content = set(selected_content)
     for row in selected:
         details = row.get("developer_context", {})
-        context_by_id = context or {}
-        edges_by_symbol = {}
-        for edge in details.get("relationship_edges", []):
-            edges_by_symbol.setdefault(edge.get("symbol"), edge.get("kind", "indexed relationship"))
-        related = []
-        seen_symbols = {row["qualified_name"]}
-        related_symbols = [context_by_id.get(chunk_id, {}).get("symbol_name")
-                           for chunk_id in details.get("related_chunk_ids", [])]
-        duplicate_symbols = len([symbol for symbol in related_symbols if symbol]) - len(
-            {symbol for symbol in related_symbols if symbol}
-        )
+        edges = {(edge.get("file_path"), edge.get("symbol")): edge.get("kind")
+                 for edge in details.get("relationship_edges", [])}
+        related, omissions = [], []
         for chunk_id in details.get("related_chunk_ids", []):
-            if chunk_id == row["chunk_id"]:
-                continue
             target = context_by_id.get(chunk_id, {})
             symbol = target.get("symbol_name")
-            if not symbol or symbol in seen_symbols:
+            path = target.get("source_region", "").split(":", 1)[0]
+            identity = (path, symbol)
+            digest = target.get("content_sha256")
+            reason = None
+            if not symbol or identity not in edges:
+                reason = "undeclared relationship"
+            elif identity in seen_symbols or (digest and digest in seen_content):
+                reason = "duplicate symbol or content"
+            elif target.get("context_budget", {}).get("status") == "omitted":
+                reason = "context exceeds token budget or is empty"
+            elif len(related) >= 5:
+                reason = "relationship expansion limit"
+            if reason:
+                omissions.append({"chunk_id": chunk_id, "symbol_name": symbol,
+                                  "file_path": path, "reason": reason})
                 continue
-            reason = next((kind for edge_symbol, kind in edges_by_symbol.items()
-                           if edge_symbol == symbol or edge_symbol.rsplit(".", 1)[-1] == symbol.rsplit(".", 1)[-1]),
-                          "indexed symbol relationship")
-            related.append({
-                "chunk_id": chunk_id,
-                "symbol_name": symbol,
-                "file_path": target.get("source_region", "").split(":", 1)[0],
-                "reason": reason,
-            })
-            seen_symbols.add(symbol)
-        row["related_context"] = related[:5]
+            related.append({"chunk_id": chunk_id, "symbol_name": symbol,
+                            "file_path": path, "reason": edges[identity],
+                            "content_sha256": digest})
+            seen_symbols.add(identity)
+            if digest:
+                seen_content.add(digest)
+        row["related_context"] = related
+        row["relationship_references"] = details.get("relationship_edges", [])
+        row["relationship_diagnostics"] = details.get("relationship_diagnostics", [])
+        row["context_omissions"] = omissions
         row["ranking_reason"]["context_expansion_reason"] = (
             "expanded to explicit static relationships" if related
             else details.get("why", "direct retrieval result")
         )
         row["ranking_reason"]["context_suppressed"] = {
             "nearby_only": len(details.get("nearby_chunk_ids", [])),
-            "duplicate_symbols": max(0, duplicate_symbols),
+            "duplicate_symbols": sum(item["reason"] == "duplicate symbol or content" for item in omissions),
         }
     return selected

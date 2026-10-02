@@ -91,7 +91,11 @@ def _history(record, event, previous, status):
                               "previous_status": previous, "status": status})
 
 
-def _apply(state, event):
+def _apply(state, event, *, copy_evidence=True):
+    # Replayed JSON belongs exclusively to this load. Its evidence is immutable
+    # during replay and can be shared by the event and its materialized view.
+    # Mutation paths retain defensive copies of caller-owned payloads.
+    copy = deepcopy if copy_evidence else lambda value: value
     for key in ("created_at", "actor", "reason"):
         _text(event[key])
     if datetime.fromisoformat(event["created_at"]).utcoffset() is None:
@@ -110,7 +114,7 @@ def _apply(state, event):
             raise ValueError("Invalid reliability record ID")
         record = {key: event["identifier"], "deployment_id": snapshot["deployment_id"],
                   "created_at": event["created_at"], "created_by": event["actor"],
-                  "deployment_snapshot": deepcopy(snapshot), "history": []}
+                  "deployment_snapshot": copy(snapshot), "history": []}
         if collection == "readiness":
             record.update(status="pending", checks=[], evidence_digest=None)
         else:
@@ -124,7 +128,7 @@ def _apply(state, event):
                 _text(prior["config_id"])
                 promotion.validate_settings(prior["settings"])
             record.update(owner=event["owner"], rollback_target=target, previous_deployment=target,
-                          previous_configuration=deepcopy(prior), validation_status="pending", verification=None)
+                          previous_configuration=copy(prior), validation_status="pending", verification=None)
         _history(record, event, None, "pending")
         state[collection].append(record)
         return
@@ -135,8 +139,8 @@ def _apply(state, event):
         status = "failed" if report["blocked"] else "passed"
         _history(record, event, record["validation_status"], status)
         record["validation_status"] = status
-        record["verification"] = deepcopy(report)
-        record["history"][-1]["verification"] = deepcopy(report)
+        record["verification"] = copy(report)
+        record["history"][-1]["verification"] = copy(report)
         return
     if action != "readiness-transition":
         raise ValueError("Unknown reliability action")
@@ -155,7 +159,7 @@ def _apply(state, event):
         raise ValueError("Unexpected readiness evidence")
     _history(record, event, record["status"], status)
     if report is not None:
-        record["history"][-1]["report"] = deepcopy(report)
+        record["history"][-1]["report"] = copy(report)
     record["status"] = status
 
 
@@ -169,7 +173,7 @@ def _load(workspace):
             if (event["mode"] != MODE or event["schema_version"] != 1 or event["sequence"] != sequence
                     or event["previous_digest"] != digest or path.name != f"{sequence:08d}.json"):
                 raise ValueError("Broken reliability journal chain")
-            _apply(state, event)
+            _apply(state, event, copy_evidence=False)
         except (KeyError, ValueError, TypeError, AttributeError) as error:
             raise LocalWorkflowError(f"Invalid reliability journal: {error}") from error
         state["events"].append(event)

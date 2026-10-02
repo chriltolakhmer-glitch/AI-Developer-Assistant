@@ -260,7 +260,7 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--retrieval-settings", type=json.loads, help='Developer settings JSON, e.g. {"relationship_factor": 1.5}.')
     optimize.add_argument("--proposed-change")
     optimize.add_argument("--validation-method")
-    optimize.add_argument("--supersedes", help="Prior rejected candidate ID this experiment retries.")
+    optimize.add_argument("--supersedes", help="Prior rejected or failed candidate ID; preserves its pending review and history.")
     optimize.add_argument("--repository", type=_path_argument)
     optimize.add_argument("--cases", type=_path_argument)
     optimize.add_argument("--before", help="Immutable named baseline for live validation.")
@@ -955,7 +955,8 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         elif options.action == "create":
             payload = create_candidate(developer, options.id, options.problem, options.case, options.source,
                                        options.proposed_change, options.validation_method, options.supersedes,
-                                       options.retrieval_settings)
+                                       options.retrieval_settings, owner=options.owner or "developer",
+                                       purpose=options.purpose or options.problem)
         elif options.action == "validate":
             if not all((options.repository, options.cases, options.before)):
                 raise ValueError("Validation requires --repository, --cases and --before.")

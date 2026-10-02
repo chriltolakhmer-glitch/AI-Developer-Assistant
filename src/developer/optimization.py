@@ -48,13 +48,14 @@ def _storage(workspace, identifier):
     return workspace._contained(workspace.root / "optimization" / "candidates" / _name(identifier))
 
 
-def create_candidate(workspace, identifier, problem, cases, source, proposed_change, validation_method, supersedes=None, retrieval_settings=None):
+def create_candidate(workspace, identifier, problem, cases, source, proposed_change, validation_method,
+                     supersedes=None, retrieval_settings=None, owner="developer", purpose=None):
     from .promotion import validate_settings
     retrieval_settings = validate_settings({} if retrieval_settings is None else retrieval_settings)
     directory = _storage(workspace, identifier)
     if any(not isinstance(value, str) or not value.strip()
-           for value in (problem, proposed_change, validation_method)):
-        raise LocalWorkflowError("Problem, proposed change and validation method must be nonempty.")
+           for value in (problem, proposed_change, validation_method, owner)):
+        raise LocalWorkflowError("Problem, proposed change, validation method and owner must be nonempty.")
     if not cases or not source or any(not isinstance(value, str) or not value.strip() for value in cases + source):
         raise LocalWorkflowError("Candidate requires affected cases and evidence event IDs.")
     events = {event["event_id"]: event for event in collect(workspace)}
@@ -68,13 +69,25 @@ def create_candidate(workspace, identifier, problem, cases, source, proposed_cha
         previous = show_candidates(workspace, supersedes)["candidates"][0]
         if previous["repository_id"] not in repositories:
             raise LocalWorkflowError("A superseding experiment must target the same repository.")
-        if not previous["decision"] or previous["decision"]["status"] != "rejected":
-            raise LocalWorkflowError("A new attempt may only supersede a previously rejected candidate.")
+        rejected = previous["decision"] and previous["decision"]["status"] == "rejected"
+        failed = not previous["decision"] and previous["result"] and not previous["result"]["passed"]
+        if not (rejected or failed):
+            raise LocalWorkflowError("A new attempt may only supersede a rejected or failed candidate.")
+    purpose = problem if purpose is None else purpose
+    if not isinstance(purpose, str) or not purpose.strip():
+        raise LocalWorkflowError("Candidate purpose must be nonempty.")
+    affected_cases = sorted(set(cases))
     return _write(workspace, directory / "candidate.json", {
-        "id": identifier, "problem": problem.strip(), "cases": sorted(set(cases)),
+        "id": identifier, "candidate_id": identifier,
+        "problem": problem.strip(), "reason": problem.strip(),
+        "purpose": purpose.strip(), "cases": affected_cases, "affected_cases": affected_cases,
         "source": sorted(set(source)), "repository_id": repositories.pop(),
         "proposed_change": proposed_change.strip(), "validation_method": validation_method.strip(),
-        "supersedes": supersedes, "retrieval_settings": retrieval_settings, "status": "candidate", "result": None})
+        "supersedes": supersedes, "source_candidate": supersedes, "owner": owner.strip(),
+        "remediation_reason": problem.strip() if supersedes else None,
+        "changed_behavior": proposed_change.strip(),
+        "validation_requirements": validation_method.strip(),
+        "retrieval_settings": retrieval_settings, "status": "candidate", "result": None})
 
 
 def show_candidates(workspace, identifier=None):
@@ -106,7 +119,8 @@ def show_candidates(workspace, identifier=None):
             current = lineage[-1]["supersedes"]
         lineage.reverse()
         candidate["history"] = [{"attempt": index + 1, "candidate_id": item["id"], "status": item["status"],
-                                 "reason": item["reason"]} for index, item in enumerate(lineage)]
+                     "validation_outcome": item["validation_outcome"],
+                     "reason": item["reason"]} for index, item in enumerate(lineage)]
     unresolved = sorted(item["id"] for item in candidates if item["status"] in {"candidate", "validated"})
     return {"mode": MODE, "candidates": candidates, "suggested_inputs": failure_patterns(events),
             "unresolved_candidates": unresolved}
@@ -120,9 +134,14 @@ def _lineage_status(workspace, identifier, cache):
     decision_path = workspace._contained(path.parent / "decision.json")
     decision = _read(workspace, decision_path) if decision_path.exists() else None
     validations_dir = workspace._contained(path.parent / "validations")
-    has_validation = validations_dir.exists() and any(validations_dir.glob("*.json"))
+    validation_records = (sorted((_read(workspace, item) for item in validations_dir.glob("*.json")),
+                                 key=lambda item: (item.get("recorded_at", ""), item.get("id", "")))
+                          if validations_dir.exists() else [])
+    has_validation = bool(validation_records)
+    validation_outcome = ("passed" if validation_records[-1].get("passed") else "failed") if has_validation else None
     status = decision["status"] if decision else "validated" if has_validation else "candidate"
-    entry = {"id": identifier, "status": status, "reason": decision["note"] if decision else None,
+    entry = {"id": identifier, "status": status, "validation_outcome": validation_outcome,
+             "reason": decision["note"] if decision else None,
              "supersedes": candidate.get("supersedes")}
     cache[identifier] = entry
     return entry
@@ -151,6 +170,12 @@ def _version(workspace, repository_id, version):
 
 
 def _duplicates(record):
+    included = record["context"].get("included_context")
+    if included is not None:
+        identities = [(item.get("file_path"), item.get("symbol_name")) for item in included]
+        digests = [item.get("content_sha256") for item in included if item.get("content_sha256")]
+        return (sum(count - 1 for count in Counter(identities).values())
+                + sum(count - 1 for count in Counter(digests).values()))
     identities = [(item["file"], item["symbol"]) for item in record["ranking"]["order"]]
     identities += [(item.get("file_path"), item.get("symbol_name"))
                    for item in record["context"].get("expanded_symbols", [])]
@@ -159,8 +184,15 @@ def _duplicates(record):
 
 def _explanation_lost(before, after):
     if isinstance(before, dict):
-        return not isinstance(after, dict) or any(
-            key not in after or _explanation_lost(value, after[key]) for key, value in before.items())
+        if not isinstance(after, dict):
+            return True
+        if before and not after:
+            return True
+        # Active ranking factors legitimately vary when ranking settings alter
+        # ordering/diversity; ranking_review separately requires a reason for
+        # those changes. They are not missing evidence explanations.
+        return any(key not in after or _explanation_lost(value, after[key])
+                   for key, value in before.items() if key != "ranking_factors")
     if isinstance(before, list):
         return not isinstance(after, list) or any(value not in after for value in before)
     return bool(before) and not after
@@ -287,11 +319,32 @@ def _validate_candidate(workspace, identifier, repository, cases_path, before, r
             checks["error"] = str(error)
         compatibility.append(checks)
     rows = comparison["comparisons"]
+    context_checks = []
+    for record in current["records"]:
+        files, symbols, _ = _evidence(record)
+        declared_files = set(record["expected"].get("files", [])) | set(record["allowed_extra_context"])
+        undeclared_files = sorted(files - declared_files)
+        missing = {
+            "files": sorted(set(record["expected"].get("files", [])) - files),
+            "symbols": sorted(set(record["expected"].get("symbols", [])) - symbols),
+            "relationships": sorted(set(record["required_relationships"]) - symbols),
+        }
+        if record["failure_tolerance"].get("allow_missing_relationships", False):
+            missing["relationships"] = []
+        difference = next(row for row in rows if row["case_id"] == record["id"])
+        context_checks.append({"case_id": record["id"], "missing_evidence": missing,
+                               "complete": not any(missing.values()),
+                               "observed_undeclared_files": undeclared_files,
+                               "newly_undeclared_files": difference.get("newly_introduced_noise", []),
+                               "duplicate_count": _duplicates(record),
+                               "declared_context": "undeclared_context_added" not in difference["regressions"]})
     gates = {
         "regression_cases": not any(row["regressions"] for row in rows),
+        "context_completeness": all(row["complete"] for row in context_checks),
+        "declared_context": all(row["declared_context"] for row in context_checks),
         "stability": bool(report["stability"]) and all(row["stable"] for row in report["stability"]),
         "ranking_review": all(not row["ranking_differences"] or bool(ranking_notes.get(row["case_id"], "").strip()) for row in rows),
-        "duplicate_context": not any("duplicate_context_increased" in row["regressions"] for row in rows),
+        "duplicate_context": all(row["duplicate_count"] == 0 for row in context_checks),
         "trace_compatibility": all(row["trace"] for row in compatibility),
         "diagnose_compatibility": all(row["diagnose"] for row in compatibility),
     }
@@ -300,6 +353,7 @@ def _validate_candidate(workspace, identifier, repository, cases_path, before, r
         "id": validation_id, "candidate_id": identifier, "retrieval_settings": settings,
         "base_configuration": base, "before": before, "after": report["history_id"],
         "gates": gates, "passed": all(gates.values()), "ranking_notes": ranking_notes,
+        "context_checks": context_checks,
         "compatibility": compatibility, "comparison": comparison, "status": "validated"})
 
 

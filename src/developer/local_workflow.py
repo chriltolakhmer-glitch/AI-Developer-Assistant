@@ -41,7 +41,7 @@ from src.scanner import RepositoryScanner
 
 
 DEVELOPER_MODE_NOTICE = "This is a local developer workspace. Results are not benchmark results."
-_INDEX_SCHEMA = "developer-local-index-v2"
+_INDEX_SCHEMA = "developer-local-index-v4"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _IGNORED_DIRECTORIES = frozenset(
     {".git", ".venv", "venv", "__pycache__", "site-packages", "build", "dist",
@@ -178,6 +178,14 @@ class DeveloperIndex:
                 chunk_id: {**details, "content_sha256": details.get("content_sha256", content_hashes.get(chunk_id))}
                 for chunk_id, details in context.items()
             }
+            for rejection in state.get("rejections", []):
+                details = context.get(rejection["chunk_id"])
+                if details is not None:
+                    details.setdefault("context_budget", {
+                        "status": "omitted", "oversized": rejection["reason"] == "over_limit",
+                        "original_token_count": rejection["token_count"],
+                        "retained_token_count": 0, "reason": rejection["reason"],
+                    })
             return cls(path, manifest, dense, lexical, context)
         except LocalWorkflowError:
             raise
@@ -371,7 +379,7 @@ class DeveloperWorkspace:
 
     def _indexes(self, inventory: LocalInventory) -> Path:
         # Leave Phase 28/29 snapshots intact; new contracts have a separate namespace.
-        return self._contained(self.root / "indexes" / _safe_component(inventory.repository_id) / "v2")
+        return self._contained(self.root / "indexes" / _safe_component(inventory.repository_id) / "v4")
 
     def inspect(self, repository: Path, changes: bool = False) -> dict[str, Any]:
         root = _resolve_repository_argument(repository)
@@ -385,27 +393,43 @@ class DeveloperWorkspace:
             warning = "Pinned local tokenizer unavailable: token limits are unknown. No model is downloaded; acquire the developer model cache to check exact coverage."
         details = []
         indexed_ids = set()
+        indexed_context = {}
+        indexed_budget = {}
+        index_schema_version = None
         active_current = False
         active_path = self._indexes(parsed.inventory) / "active.json"
         if active_path.exists():
             active = self._read_active(active_path.parent)
             active_current = active == parsed.inventory.snapshot_id
             index_path = self._contained(active_path.parent / active)
-            DeveloperIndex.load(index_path)
+            loaded_index = DeveloperIndex.load(index_path)
+            indexed_context = loaded_index.context
+            indexed_budget = {details.get("original_chunk_id", chunk_id): details.get("context_budget")
+                              for chunk_id, details in indexed_context.items()
+                              if details.get("context_budget")}
+            index_schema_version = loaded_index.manifest.get("schema_version")
             if active_current:
                 indexed_ids = {row["chunk_id"] for row in json.loads((index_path / "documents.json").read_text(encoding="utf-8"))}
+                indexed_ids.update(details.get("original_chunk_id", chunk_id)
+                                   for chunk_id, details in indexed_context.items()
+                                   if details.get("context_budget", {}).get("status") == "truncated")
         for chunk in parsed.chunks:
             text = chunk.content.strip()
             count = None if tokenizer is None else len(tokenizer(text, add_special_tokens=True, truncation=False, padding=False, verbose=False)["input_ids"])
-            reason = "empty" if not text else "unknown" if count is None else "over_limit" if count > 256 else "eligible"
+            budget = indexed_budget.get(chunk.chunk_id)
+            reason = ("empty" if not text else "unknown" if count is None else
+                      "bounded" if budget and budget.get("status") == "truncated" else
+                      "over_limit" if count > 256 else "eligible")
             details.append({"chunk_id": chunk.chunk_id, "file_path": chunk.file_path,
                             "qualified_name": chunk.qualified_name, "start_line": chunk.start_line,
                             "end_line": chunk.end_line, "token_count": count, "reason": reason,
-                            "in_current_index": chunk.chunk_id in indexed_ids})
+                            "in_current_index": chunk.chunk_id in indexed_ids,
+                            "context_budget": indexed_budget.get(chunk.chunk_id)})
         counts = Counter(item["reason"] for item in details)
         payload = {"status": "completed", "mode": "developer-local", "repository": parsed.inventory.summary(),
                    "files": list(parsed.inventory.file_decisions), "generated_chunk_count": len(parsed.chunks),
-                   "chunk_counts": {key: counts[key] for key in ("eligible", "empty", "over_limit", "unknown")}, "chunks": details,
+                   "chunk_counts": {key: counts[key] for key in ("eligible", "bounded", "empty", "over_limit", "unknown")}, "chunks": details,
+                   "index_schema_version": index_schema_version,
                    "parse_failure_count": len(parsed.parse_failures),
                    "skipped_chunk_count": counts["empty"] + counts["over_limit"],
                    "parse_failures": list(parsed.parse_failures), "warning": warning,
@@ -519,19 +543,23 @@ class DeveloperWorkspace:
                             reused_embeddings.append(Embedding(row["chunk_id"], tuple(float(v) for v in vector), EmbeddingMetadata(**row["metadata"])))
             changed = replace(inventory, files=tuple(f for f in inventory.files if f.relative_path not in unchanged))
             fresh = _parse_inventory(changed)
-            parsed = ParsedLocalCode(inventory, tuple(sorted(cached_chunks + list(fresh.chunks), key=lambda c: c.chunk_id)),
-                                     tuple(sorted(cached_failures + list(fresh.parse_failures), key=lambda f: f["file_path"])),
-                                     {**{chunk_id: cached_context[chunk_id] for chunk_id in cached_context
-                                         if chunk_id in {chunk.chunk_id for chunk in cached_chunks}}, **fresh.context})
-            stale_symbol_count = len({chunk.qualified_name for chunk in cached_chunks if chunk.file_path in changed_files} -
-                                     {chunk.qualified_name for chunk in parsed.chunks if chunk.file_path in changed_files})
             try:
                 if fresh.chunks:
-                    new_embeddings, new_rejections = _embed_developer_chunks(fresh.chunks, self.root / "model-cache")
+                    new_embeddings, new_rejections = _embed_developer_chunks(
+                        fresh.chunks, self.root / "model-cache", parsed=fresh)
                 else:
                     new_embeddings, new_rejections = (), ()
             except Exception as error:
                 raise LocalWorkflowError(f"Could not index with the pinned local model: {error}. Check WORKSPACE/model-cache; run prototype local inspect PATH for coverage.") from error
+            parsed = ParsedLocalCode(
+                inventory,
+                tuple(sorted(cached_chunks + list(fresh.chunks), key=lambda c: c.chunk_id)),
+                tuple(sorted(cached_failures + list(fresh.parse_failures), key=lambda f: f["file_path"])),
+                {**{chunk_id: cached_context[chunk_id] for chunk_id in cached_context
+                    if chunk_id in {chunk.chunk_id for chunk in cached_chunks}}, **fresh.context},
+            )
+            stale_symbol_count = len({chunk.qualified_name for chunk in cached_chunks if chunk.file_path in changed_files} -
+                                     {chunk.qualified_name for chunk in parsed.chunks if chunk.file_path in changed_files})
             embeddings = tuple(reused_embeddings) + tuple(new_embeddings)
             rejections = tuple(sorted(tuple(cached_rejections) + tuple(new_rejections), key=lambda row: row["chunk_id"]))
             if not embeddings:
@@ -552,6 +580,14 @@ class DeveloperWorkspace:
             "parse_failure_count": len(parsed.parse_failures), "parse_failures": list(parsed.parse_failures),
             "chunk_count": len(parsed.chunks), "indexed_chunk_count": indexed_count,
             "rejected_chunk_count": len(rejections), "rejections": sorted({r["reason"] for r in rejections}),
+            "context_budget_diagnostics": [
+                {"chunk_id": chunk_id,
+                 "original_chunk_id": details.get("original_chunk_id", chunk_id),
+                 "symbol": details.get("symbol_name"),
+                 "file_path": details.get("original_source_region", details.get("source_region", "")).split(":", 1)[0],
+                 **details["context_budget"]}
+                for chunk_id, details in parsed.context.items() if "context_budget" in details
+            ],
             "reused_file_count": reused_files, "rebuilt_file_count": len(inventory.files) - reused_files,
             "reused_chunk_count": reused_chunks, "rebuilt_chunk_count": indexed_count - reused_chunks,
             "removed_file_count": removed_files,
@@ -576,7 +612,7 @@ class DeveloperWorkspace:
             repo_indexes = self._indexes(inventory)
             active = self._read_active(repo_indexes)
         else:
-            active_files = sorted((self.root / "indexes").glob("*/v2/active.json"))
+            active_files = sorted((self.root / "indexes").glob("*/v4/active.json"))
             if not active_files:
                 raise LocalWorkflowError(
                     f"No developer index exists under '{self.root / 'indexes'}'. "
@@ -648,7 +684,20 @@ class DeveloperWorkspace:
                     related_group["results"].append(related_id)
                 if related["reason"] not in related_group.setdefault("expansion_reasons", []):
                     related_group["expansion_reasons"].append(related["reason"])
+        selected_context_ids = {row["chunk_id"] for row in result_rows}
+        selected_context_ids.update(item["chunk_id"] for row in result_rows
+                                    for item in row.get("related_context", []))
         payload["context"] = {
+            "index_schema_version": index.manifest.get("schema_version"),
+            "included_context": [
+                {"file_path": row["file_path"], "symbol_name": row["qualified_name"],
+                 "content_sha256": row["developer_context"].get("content_sha256"), "origin": "direct"}
+                for row in result_rows
+            ] + [
+                {"file_path": item["file_path"], "symbol_name": item["symbol_name"],
+                 "content_sha256": item.get("content_sha256"), "origin": "relationship"}
+                for row in result_rows for item in row.get("related_context", [])
+            ],
             "files": list(grouped.values()),
             "expansion_decisions": [
                 {"chunk_id": row["chunk_id"], "reason": row["ranking_reason"]["context_expansion_reason"],
@@ -661,6 +710,17 @@ class DeveloperWorkspace:
                 for duplicate in row["ranking_reason"].get("duplicate_suppressed", [])
             ],
             "excluded_context": "Overlapping source ranges and duplicate file ranges are omitted from the selected context.",
+            "budget_diagnostics": [
+                {"chunk_id": key, "symbol": details.get("symbol_name"),
+                 "file_path": details.get("source_region", "").split(":", 1)[0],
+                 "selected": key in selected_context_ids,
+                 **details["context_budget"]}
+                for key, details in index.context.items() if "context_budget" in details
+            ],
+            "omitted_context": [item for row in result_rows
+                                for item in row.get("context_omissions", [])],
+            "relationship_diagnostics": [item for row in result_rows
+                                          for item in row.get("relationship_diagnostics", [])],
         }
         payload["run_id"] = self._record_run("query", current, payload)
         from .observability import record_retrieval
@@ -736,6 +796,7 @@ class DeveloperWorkspace:
             related.get("symbol_name") for row in current["results"]
             for related in row.get("related_context", []) if related.get("symbol_name")
         }
+        available_relationships.update(available_symbols)
         missing = {
             "files": sorted(expected_files - available_files),
             "symbols": sorted(expected_symbols - available_symbols),
@@ -755,6 +816,8 @@ class DeveloperWorkspace:
             "expected_evidence": {"files": sorted(expected_files), "symbols": sorted(expected_symbols),
                                   "relationships": sorted(expected_relationships)},
             "missing_expected_evidence": missing,
+            "budget_diagnostics": current["context"].get("budget_diagnostics", []),
+            "omitted_context": current["context"].get("omitted_context", []),
             "extra_context": {"files": extra_files,
                               "allowed_files": sorted(set(extra_files) & allowed_extras),
                               "unexpected_files": ([] if tolerance.get("allow_extra_files", True)
@@ -826,7 +889,7 @@ class DeveloperWorkspace:
             raise LocalWorkflowError(f"Case '{case_id}' was not found in '{cases_path}'.")
         self._prepare()
         if repository is None:
-            active_files = sorted((self.root / "indexes").glob("*/v2/active.json"))
+            active_files = sorted((self.root / "indexes").glob("*/v4/active.json"))
             if not active_files:
                 index = None
                 root = None
@@ -1273,28 +1336,72 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
     chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
     for chunk_id, details in context.items():
         edges = []
+        diagnostics = []
         targets = (
             ("import_relationship", details.get("related_symbol_names", [])),
             ("call_relationship", details.get("called_symbol_names", [])),
         )
         for kind, names in targets:
             for name in names:
-                for target_id in by_leaf_name.get(name, ()):
-                    if target_id != chunk_id:
-                        target = chunks_by_id[target_id]
-                        edges.append({"symbol": target.qualified_name, "file_path": target.file_path,
-                                      "kind": kind})
+                source = chunks_by_id[chunk_id]
+                candidates = [chunks_by_id[target_id] for target_id in by_leaf_name.get(name, ())
+                              if target_id != chunk_id]
+
+                def declared_for(target):
+                    module_parts = PurePosixPath(target.file_path).with_suffix("").parts
+                    if module_parts and module_parts[-1] == "__init__":
+                        module_parts = module_parts[:-1]
+                    target_module = ".".join(module_parts)
+                    top_level = target.qualified_name.split(".", 1)[0]
+                    imports = set(details.get("imports", []))
+                    return (f"{target_module}.{target.qualified_name}" in imports
+                            or f"{target_module}.{top_level}" in imports
+                            or (target_module in imports and name == target_module.rsplit(".", 1)[-1]))
+
+                # Calls within a file can be linked only when the called leaf is
+                # unique. Cross-file candidates require a matching import path.
+                eligible = [target for target in candidates
+                            if (target.file_path == source.file_path and kind == "call_relationship")
+                            or declared_for(target)]
+                if len(eligible) > 1:
+                    diagnostics.append({"symbol": name, "kind": kind, "status": "ambiguous",
+                                        "reason": "multiple same-name targets satisfy available file/import evidence",
+                                        "candidates": sorted({f"{target.file_path}:{target.qualified_name}"
+                                                              for target in eligible})})
+                    continue
+                if not eligible:
+                    if candidates:
+                        diagnostics.append({"symbol": name, "kind": kind, "status": "unresolved",
+                                            "reason": "same-name candidates lack matching file/module/import evidence",
+                                            "candidates": sorted({f"{target.file_path}:{target.qualified_name}"
+                                                                  for target in candidates})})
+                    continue
+                target = eligible[0]
+                edges.append({"symbol": target.qualified_name, "file_path": target.file_path,
+                              "kind": kind})
         parent_symbol = details.get("parent_symbol")
         if parent_symbol:
-            for target_id in by_leaf_name.get(parent_symbol.rsplit(".", 1)[-1], ()):
-                target = chunks_by_id[target_id]
-                if target_id != chunk_id and target.file_path == chunks_by_id[chunk_id].file_path:
-                    edges.append({"symbol": target.qualified_name, "file_path": target.file_path,
-                                  "kind": "parent_relationship"})
+            source = chunks_by_id[chunk_id]
+            parents = [target for target in chunks if target.file_path == source.file_path
+                       and target.qualified_name == parent_symbol and target.chunk_id != chunk_id]
+            if len(parents) == 1:
+                edges.append({"symbol": parents[0].qualified_name, "file_path": parents[0].file_path,
+                              "kind": "parent_relationship"})
+            elif not parents:
+                diagnostics.append({"symbol": parent_symbol, "kind": "parent_relationship",
+                                    "status": "unresolved", "reason": "qualified parent was not found",
+                                    "candidates": []})
         details["relationship_edges"] = sorted(
             { (edge["symbol"], edge["file_path"], edge["kind"]): edge for edge in edges }.values(),
             key=lambda edge: (edge["kind"], edge["file_path"], edge["symbol"]),
         )
+        details["relationship_diagnostics"] = sorted(
+            diagnostics, key=lambda item: (item["kind"], item["symbol"], item["status"]))
+        details["related_chunk_ids"] = sorted({
+            target.chunk_id for target in chunks
+            if any(edge["symbol"] == target.qualified_name and edge["file_path"] == target.file_path
+                   for edge in edges)
+        })
     chunks_by_symbol: dict[str, list[str]] = {}
     for chunk_id, details in context.items():
         chunks_by_symbol.setdefault(details["symbol_name"], []).append(chunk_id)
@@ -1303,11 +1410,12 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
         source_chunk = chunks_by_id[source_id]
         for edge in details.get("relationship_edges", []):
             inverse_kind = {"call_relationship": "caller_relationship",
-                            "import_relationship": "importer_relationship"}.get(edge["kind"])
+                            "import_relationship": "importer_relationship",
+                            "parent_relationship": "member_relationship"}.get(edge["kind"])
             if inverse_kind is None:
                 continue
             for target_id in chunks_by_symbol.get(edge["symbol"], ()):
-                if target_id != source_id:
+                if target_id != source_id and chunks_by_id[target_id].file_path == edge["file_path"]:
                     incoming.setdefault(target_id, []).append({
                         "symbol": source_chunk.qualified_name,
                         "file_path": source_chunk.file_path,
@@ -1373,10 +1481,16 @@ def _developer_context(module: Any, source: str, chunks: tuple[CodeChunk, ...]) 
 
 
 def _embed_developer_chunks(
-    chunks: tuple[CodeChunk, ...], model_cache: Path,
+    chunks: tuple[CodeChunk, ...], model_cache: Path, *, model=None, parsed=None,
 ) -> tuple[tuple[Embedding, ...], tuple[dict[str, Any], ...]]:
     """Apply the pinned local embedding contract without research clearance files."""
-    model = load_model(model_cache)
+    model = model or load_model(model_cache)
+    if parsed is not None:
+        from .context import bound_configuration
+        prepared = bound_configuration(parsed, model.tokenizer)
+        object.__setattr__(parsed, "chunks", prepared.chunks)
+        object.__setattr__(parsed, "context", prepared.context)
+        chunks = parsed.chunks
     accepted: list[tuple[CodeChunk, EmbeddingMetadata, str]] = []
     rejected: list[dict[str, Any]] = []
     for chunk in sorted(chunks, key=lambda item: item.chunk_id):

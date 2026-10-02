@@ -1111,3 +1111,54 @@ hosts; retain terminal results and distinguish resource failures from gate findi
 See [Phase 60 pilot findings and limitations](phase60-developer-real-repository-pilot.md)
 for real retrieval evidence, the diagnostic correction, failed candidate, and the
 distinction between synthetic lifecycle coverage and real-pilot closure.
+
+## Phase 61: developer retrieval candidate remediation
+
+Phase 61 continues from the immutable Phase 60 failed candidate. It addresses
+bounded configuration context, cross-result duplicate suppression, conservative
+relationship resolution, explicit context diagnostics, and reduced copying during
+developer evidence replay. It changes only developer-local retrieval/index behavior;
+it does not alter research retrieval, chunking contracts, benchmark artifacts,
+Humanize, or release files.
+
+Oversized configuration chunks are measured with the pinned developer tokenizer
+before embedding. The index retains whole-line excerpts within the existing
+256-token input budget where possible, preserves source symbol identity, and records
+original and retained ranges/hashes plus truncation or omission reason. `inspect`
+reports bounded chunks separately from excluded chunks. Query diagnostics separate
+selected context, relationship-expanded context, duplicate suppression, unresolved
+relationships, and oversized/bounded/omitted context. A file or symbol absent from
+the final context remains explicit evidence, not an inferred deletion.
+
+Duplicate checks span all direct results and all caller/callee/importer/dependency
+expansion paths. Each source identity or identical-content digest is emitted at most
+once; relationship references remain available when duplicate context is suppressed.
+Inter-file graph links require matching module/import evidence, same-file calls
+require an unambiguous target, and ambiguous/unresolved same-name symbols are
+reported rather than guessed. Graph expansion remains static source evidence, not
+proof of runtime execution.
+
+Phase 61 writes indexes under the developer-only `indexes/REPOSITORY/v4/` namespace
+and records that schema in inspection/query diagnostics. Phase 60 v2 and interim v3
+snapshots are not loaded as v4; run `prototype local index` to build a compatible developer index.
+The v6 developer ranking contract also avoids relationship boosts based only on
+generic one-token overlap; exact qualified-symbol or multiple specific-term evidence
+is required.
+No generated index or candidate/review/evidence record belongs in the source tree.
+
+Create a successor using `prototype local optimize create` with new ID, owner,
+purpose, affected cases, source evidence, remediation description, validation
+requirements, and `--supersedes phase60-config-context`. The failed original and its
+pending review are retained unchanged. Re-run regression and candidate validation
+with the same authorized pilot repositories and declared cases. Validation reports
+regression, completeness, declared-context, duplicate-context, stability, ranking,
+trace and diagnose gates. A candidate with a failed required gate is not eligible
+for review. The Phase 61 successor passed the recorded pilot gates and has a new
+pending review; human approval remains outstanding. Review items retain candidate
+lineage and validation evidence. No candidate is automatically approved, activated, deployed, rolled back,
+recovered, or used to close readiness.
+
+The TypeScript-only pilot remains explicitly unsupported by this Python indexer.
+Do not describe its scan/query rejection as successful cross-language retrieval.
+See [Phase 61 remediation and re-validation](phase61-developer-retrieval-candidate-remediation.md)
+for the measured pilot results, gate outcomes, limitations, and preservation checks.
