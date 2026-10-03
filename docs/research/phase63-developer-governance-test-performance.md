@@ -129,23 +129,26 @@ comparison; the large savings principally accompany avoiding repeated journal
 replay. Nested live checks (for example governance close checks and reviews)
 remain expensive.
 
-The exact complete-chain test passed unprofiled in 1089.875 s, compared with the
-Phase 62 developer-run baseline of 1167.423 s (77.548 s / 6.65% lower). It is
-not lower than the historical full-discovery run of 1072.698 s, so no comparable
-T4 claim is made. The drift/expiry test passed in 771.917 s versus 1352.970 s in
-the Phase 62 developer run (581.053 s / 42.9% lower). Its lightweight test-body
-diagnostic measured 652.583 s (fixture setup is excluded in that mode) and
+The complete-chain test passed unprofiled in the final T2 run at 942.374 s,
+compared with the Phase 62 developer-run baseline of 1167.423 s (225.049 s /
+19.3% lower). The T4 instance took 1089.875 s versus the Phase 62 full-discovery
+instance at 1072.698 s, so no T4 speedup is claimed for that individual test.
+The drift/expiry test passed in the final T2 run at 656.783 s versus 1352.970 s
+in Phase 62 (696.187 s / 51.5% lower). Its lightweight test-body diagnostic
+measured 652.583 s (fixture setup is excluded in that mode) and
 recorded 13 real audit invocations totaling 554.671 s (36.302–49.822 s each);
 some calls execute under deliberate dependency-failure patches in the test.
 This confirms that the test repeatedly executes live audits rather than reusing
 one audit result. Do not compare this 13-audit sum directly with the single-audit
 microdiagnostic: their scope and wrappers differ.
 
-Prepared-seed test timings after the fixture change were 270.335 s for the CLI /
-manual-items test (Phase 62: 353.810 s; reduction 83.475 s / 23.6%) and
-118.864 s for missing/orphaned-links/read-only isolation (Phase 62: 339.863 s;
-reduction 220.999 s / 65.0%). Focused cache integrity, atomic append/corruption
-and incomplete-chain tests passed in 0.276 s, 0.425 s and 91.443 s respectively.
+The final T2 run measured the CLI/manual-items test at 297.776 s (Phase 62:
+353.810 s; reduction 56.034 s / 15.8%), missing/orphaned-links/read-only
+isolation at 139.936 s (Phase 62: 339.863 s; reduction 199.927 s / 58.8%), and
+incomplete-chain transitions/follow-up at 88.806 s (Phase 62: 123.020 s;
+reduction 34.214 s / 27.8%). The earlier focused prepared-seed runs measured
+the CLI case at 270.335 s and missing/orphan isolation at 118.864 s. Focused
+cache integrity and atomic append/corruption tests passed in 0.276 s and 0.425 s.
 These test-level timings include each test's own actions and audits; fixture
 construction was shared once within that worker, then its temporary workspace
 was copied into a private per-test workspace. The prepared source remained
@@ -160,6 +163,13 @@ Full T2 and T4 gates passed:
 - T4 full discovery: 386 run, 384 passed, 2 environment-dependent skips,
   0 failures/errors, 3336.060 s. The two existing skips require the unavailable
   `EMBEDDING_MODEL_CACHE`; no skip was added by Phase 63.
+- Phase 62 comparison: T2 was 4489.695 s for 215 tests, T4 was 3986.838 s for
+  385 tests. The current runs are 1307.618 s (29.1%) and 650.778 s (16.3%)
+  lower respectively while each runs one additional test, on the same recorded
+  Windows Server 2022 / Python 3.14.7 environment. These suite-level totals are
+  descriptive comparisons; module composition, warm filesystem/model caches and
+  timing overhead can still affect them, so targeted test comparisons above are
+  the primary evidence.
 
 ## Integrity and test architecture
 
