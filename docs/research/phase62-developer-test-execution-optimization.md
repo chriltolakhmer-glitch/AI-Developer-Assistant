@@ -208,8 +208,11 @@ Development-loop checks:
 
 Required developer regression:
 
-- `python -m unittest tests.test_developer_mode -v`: 215 run, 215 passed, zero
-  skips, failures or errors; 4489.695 seconds (74 minutes 50 seconds wall time).
+- `prototype local test-timing --component developer` selected and ran the
+  complete `tests.test_developer_mode` module in a fresh worker process: 215 run,
+  215 passed, zero skips, failures or errors; 4489.695 seconds (74 minutes 50
+  seconds wall time). This was the existing instrumented developer-suite run,
+  not a second rerun of the module.
 - The slowest developer tests were operational-readiness drift/expiry (1352.970
   seconds), complete-chain closure/history (1167.423 seconds), CLI/manual
   outstanding items (353.810 seconds), missing/orphaned links (339.863 seconds),
