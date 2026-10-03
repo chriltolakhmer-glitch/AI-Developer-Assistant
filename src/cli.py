@@ -195,6 +195,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description=_DEVELOPER_MODE_NOTICE,
     )
     local_commands = local.add_subparsers(dest="local_command", required=True)
+    from src.developer_testing import add_arguments
+    for name in ("test", "test-timing"):
+        test_command = local_commands.add_parser(name, help="Select and time developer tests; full discovery is a final gate only.")
+        add_arguments(test_command)
     for name, help_text in (
         ("scan", "Read-only scan of a local Git repository."),
         ("inspect", "Explain file exclusions, parser failures and chunk coverage."),
@@ -1486,6 +1490,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     options = parser.parse_args(arguments)
     tracker = None
     try:
+        if options.command == "local" and options.local_command in {"test", "test-timing"}:
+            from src.developer_testing import run_command
+            return run_command(options)
         config = load_config(options.config)
         if options.command == "local":
             _run_local_command(options, config)

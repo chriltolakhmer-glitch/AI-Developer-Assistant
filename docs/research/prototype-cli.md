@@ -38,6 +38,37 @@ Developer commands do not invoke the research validation runner, research `RunTr
 
 ## Commands
 
+### Developer test execution (Phase 62)
+
+`prototype local test` runs the small T0 validation tier. Use `--test` with a dotted
+unittest method/class/module for targeted execution, `--component developer` for
+the complete developer suite, or `--changed --dry-run` to inspect the conservative
+source-import dependency selection. `--base COMMIT` includes committed changes
+since that reference as well as staged, unstaged and untracked changes.
+
+`prototype local test-timing` uses the same selectors and reports test durations,
+module/class totals, fastest/slowest tests, skips, failures, errors and environment
+limitations. `--profile` adds resource call counts/times with profiling overhead.
+Both commands emit JSON; `--report NEW_EXTERNAL_PATH` retains a new report outside
+the checkout. Tests run in a fresh subprocess with the current Python interpreter.
+Unittest progress goes to stderr and failures propagate a nonzero command status.
+
+```powershell
+prototype local test
+prototype local test --changed --dry-run
+prototype local test --component developer
+prototype local test --test tests.test_developer_mode.DeveloperModeTests.test_phase61_relationships_require_file_identity
+prototype local test-timing --test tests.test_config --report C:/Apps/test-evidence/config.json
+```
+
+Unknown changes produce an explicit broader T4 plan and require `--final-gate`
+before execution. Full discovery remains a final gate, after targeted/component
+checks, developer regression when affected, and preservation checks. It is never
+the normal development loop. Existing tests and cache-dependent skips are unchanged.
+See the [Phase 62 policy and limitations](phase62-developer-test-execution-optimization.md)
+and the repository's `AGENTS.md`. These commands run test fixtures; they do not
+create developer workspace state or research run records.
+
 ### `prototype validate`
 
 Runs the scanner, parser, and chunker over already-present local checkouts. It never clones, fetches, or writes into a source checkout.
