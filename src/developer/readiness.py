@@ -14,6 +14,7 @@ from . import (assurance, assurance_operations, configuration, continuity, deplo
                strategic_governance as strategic)
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import DeveloperReadContext, operation_scoped_load
 
 MODE = "developer-retrieval-operational-readiness"
 STATES = {
@@ -35,7 +36,7 @@ def _root(workspace):
 
 def _readonly(workspace):
     _root(workspace)
-    return promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    return promotion._readonly(workspace)
 
 
 def _resolve(state, identifier):
@@ -50,9 +51,10 @@ def _reference(component, record, key):
             "sha256": reliability._digest(record)}
 
 
-def audit(workspace, deployment_id=None, decision_id=None):
-    """Read-only integration of retained histories and live prerequisite checks."""
+def _audit_with_context(workspace, deployment_id, decision_id, context):
+    """Internal audit implementation; context lifetime is controlled by caller."""
     workspace = _readonly(workspace)
+    workspace._read_context = context
     now = _now()
     result = {"mode": MODE, "generated_at": now.isoformat(), "passed": [], "warnings": [],
               "blocked": [], "missing": [], "inconsistent": [], "stale_evidence": [],
@@ -327,6 +329,11 @@ def audit(workspace, deployment_id=None, decision_id=None):
     return result
 
 
+def audit(workspace, deployment_id=None, decision_id=None):
+    """Read-only audit with validated journal reuse limited to this invocation."""
+    return _audit_with_context(workspace, deployment_id, decision_id, DeveloperReadContext())
+
+
 def _apply(state, event):
     for key in ("actor", "reason", "readiness_id"):
         reliability._text(event[key])
@@ -411,6 +418,7 @@ def _apply(state, event):
                                "created_at": event["created_at"], "actor": event["actor"], "reason": event["reason"]})
 
 
+@operation_scoped_load("readiness", _root)
 def _load(workspace):
     state = {"mode": MODE, "readiness": [], "events": []}
     digest = None

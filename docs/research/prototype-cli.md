@@ -52,6 +52,12 @@ limitations. `--profile` adds resource call counts/times with profiling overhead
 Both commands emit JSON; `--report NEW_EXTERNAL_PATH` retains a new report outside
 the checkout. Tests run in a fresh subprocess with the current Python interpreter.
 Unittest progress goes to stderr and failures propagate a nonzero command status.
+For Phase 63 readiness/governance performance work, use targeted timing without
+`--profile`; whole-test cProfile severely distorts replay-heavy lifecycle tests.
+The opt-in `tests/phase63_readiness_timing.py` diagnostic uses `perf_counter()`
+and writes aggregate counts/timings only to an external report path. Its default
+measures lifecycle setup plus one explicit audit; `--test drift` runs the real
+drift/expiry unittest once and records how often it invokes `readiness.audit()`.
 
 ```powershell
 prototype local test
@@ -59,6 +65,8 @@ prototype local test --changed --dry-run
 prototype local test --component developer
 prototype local test --test tests.test_developer_mode.DeveloperModeTests.test_phase61_relationships_require_file_identity
 prototype local test-timing --test tests.test_config --report C:/Apps/test-evidence/config.json
+python -B tests/phase63_readiness_timing.py --report C:/Apps/Temp/phase63/audit.json
+python -B tests/phase63_readiness_timing.py --test drift --report C:/Apps/Temp/phase63/drift.json
 ```
 
 Unknown changes produce an explicit broader T4 plan and require `--final-gate`

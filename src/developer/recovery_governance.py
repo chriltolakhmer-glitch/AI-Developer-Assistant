@@ -7,6 +7,7 @@ import tempfile
 from . import assurance, configuration, continuity, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-governance"
 STATES = {"draft": {"active", "retired"}, "active": {"paused", "expired", "retired"},
@@ -111,6 +112,7 @@ def _apply(state, event):
                                                {"owner", "responsibility", "interval_hours", "kind", "note", "source", "findings"}})
 
 
+@operation_scoped_load("recovery_governance", _root)
 def _load(workspace):
     state = {"mode": MODE, "assurances": [], "events": []}
     digest = None

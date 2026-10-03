@@ -7,6 +7,7 @@ from . import assurance, assurance_operations as operations, configuration, cont
 from . import recovery_governance as governance, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-maturity"
 LEVELS = ("initial", "defined", "managed", "measured", "improving")
@@ -134,6 +135,7 @@ def _apply(state, event):
                              {"capability", "gaps", "improvement_notes", "plan_id", "status", "note", "improvements", "supersedes"}})})
 
 
+@operation_scoped_load("maturity", _root)
 def _load(workspace):
     state = {"mode": MODE, "maturities": [], "events": []}
     digest = None

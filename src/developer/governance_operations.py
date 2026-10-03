@@ -9,6 +9,7 @@ import tempfile
 from . import assurance, strategic_governance as strategic, maturity, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-governance-operations"
 DECISIONS = {"open": {"reviewing", "deferred"}, "reviewing": {"decided", "deferred", "open"},
@@ -63,8 +64,11 @@ def _proof(proof, required=False):
         raise ValueError("Completion requires evidence or an explicit manual closure reason")
 
 
-def _source_valid(source):
-    if source["digest"] != reliability._digest(source["snapshot"]):
+def _source_valid(source, read_context=None):
+    calculate = reliability._digest
+    actual = (read_context.validated_digest(source["snapshot"], source["digest"], calculate)
+              if read_context is not None else calculate(source["snapshot"]))
+    if source["digest"] != actual:
         raise ValueError("Invalid governance source digest")
 
 
@@ -86,7 +90,7 @@ def _closure_invariants(record, timestamp):
         _proof(item["closure_evidence"], required=True)
 
 
-def _apply(state, event):
+def _apply(state, event, *, read_context=None):
     for key in ("actor", "reason", "decision_id"):
         reliability._text(event[key])
     timestamp = assurance._timestamp(event["created_at"])
@@ -97,7 +101,7 @@ def _apply(state, event):
             raise ValueError("Invalid decision ID")
         for key in ("governance_id", "decision", "owner"):
             reliability._text(event[key])
-        _source_valid(event["source"])
+        _source_valid(event["source"], read_context)
         if event["source"]["snapshot"]["record"]["governance_id"] != event["governance_id"]:
             raise ValueError("Mismatched governance objective")
         record = {k: event[k] for k in ("decision_id", "governance_id", "decision", "owner", "created_at")}
@@ -114,7 +118,7 @@ def _apply(state, event):
             record["owner"] = event["owner"]
         elif action == "review":
             reliability._text(event["note"])
-            _source_valid(event["source"])
+            _source_valid(event["source"], read_context)
             if event["source"]["snapshot"]["record"]["governance_id"] != record["governance_id"]:
                 raise ValueError("Review references a different governance objective")
             _proof(event["proof"])
@@ -127,7 +131,7 @@ def _apply(state, event):
             if target not in DECISIONS[previous]:
                 raise ValueError("Invalid decision transition")
             if target in {"decided", "closed"}:
-                _source_valid(event["source"])
+                _source_valid(event["source"], read_context)
                 if (not record["reviews"] or record["reviews"][-1]["source"] != event["source"]
                         or record["reviews"][-1]["owner"] != record["owner"]):
                     raise ValueError("A current explicit review by the current owner is required")
@@ -208,6 +212,7 @@ def _apply(state, event):
         item["history"].append({"previous_status": prior_item, "current_status": item["status"], **deepcopy(event)})
 
 
+@operation_scoped_load("governance_operations", _root)
 def _load(workspace):
     state = {"mode": MODE, "decisions": [], "events": []}
     digest = None
@@ -218,7 +223,7 @@ def _load(workspace):
             if (event["mode"] != MODE or event["schema_version"] != 1 or event["sequence"] != sequence
                     or event["previous_digest"] != digest or path.name != f"{sequence:08d}.json"):
                 raise ValueError("Broken decision journal chain")
-            _apply(state, event)
+            _apply(state, event, read_context=getattr(workspace, "_read_context", None))
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
             raise LocalWorkflowError(f"Invalid decision journal: {error}") from error
         state["events"].append(event)

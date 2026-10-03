@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .local_workflow import DeveloperWorkspace, LocalWorkflowError, _json_bytes, _overlaps, _PROJECT_ROOT
 from .optimization import _read, _name, show_candidates, _version
+from .read_context import operation_scoped_load
 from .review import _all_reviews, _validation_summary, policy_check
 
 MODE = "developer-retrieval-promotion"
@@ -26,11 +27,21 @@ EXPERIMENT = ContextVar("developer_promotion_experiment", default=None)
 class _ReadOnlyWorkspace(DeveloperWorkspace):
     """Reuse prior-phase evidence readers without their initialization side effects."""
 
+    def __init__(self, root, research_roots=(), read_context=None):
+        super().__init__(root, research_roots)
+        self._read_context = read_context
+
     def _prepare(self, repository=None):
         _root(self)
         if repository is not None:
             self._assert_isolated(self.root, (repository,), "Developer workspace")
             self._assert_isolated(repository, self.research_roots, "Repository")
+
+
+def _readonly(workspace):
+    """Create a read-only facade while preserving operation-scoped state reuse."""
+    return _ReadOnlyWorkspace(workspace.root, workspace.research_roots,
+                              getattr(workspace, "_read_context", None))
 
 
 def validate_settings(settings):
@@ -64,6 +75,7 @@ def _configuration(promotions, timestamp):
             "entries": entries, "updated_at": timestamp}
 
 
+@operation_scoped_load("promotion", _root)
 def _load(workspace):
     state = _empty()
     digest = None
@@ -280,7 +292,7 @@ def promotion_status(workspace):
 
 def promotion_check(workspace):
     report = {"mode": MODE, "passed": [], "warnings": [], "blocked": [], "automatic_changes": False}
-    workspace = _ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = _readonly(workspace)
     try:
         state = _load(workspace)
         report["passed"].append({"check": "configuration_consistency"})

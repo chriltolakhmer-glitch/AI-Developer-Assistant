@@ -6,6 +6,7 @@ import tempfile
 from . import assurance, continuity, recovery_governance as governance, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-assurance-operations"
 STATES = {"open": {"reviewing"}, "reviewing": {"improved", "accepted"},
@@ -123,6 +124,7 @@ def _apply(state, event):
     record["history"][-1].update({"action": action, "owner": record["owner"]})
 
 
+@operation_scoped_load("assurance_operations", _root)
 def _load(workspace):
     state = {"mode": MODE, "operations": [], "findings": [], "events": []}
     digest = None

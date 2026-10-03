@@ -7,6 +7,7 @@ import tempfile
 from . import continuity, operations, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-assurance"
 STATES = {"pending": {"verifying", "expired"}, "verifying": {"passed", "failed", "expired"},
@@ -94,6 +95,7 @@ def _apply(state, event):
     record["status"] = status
 
 
+@operation_scoped_load("assurance", _root)
 def _load(workspace):
     state = {"mode": MODE, "assurances": [], "events": []}
     digest = None

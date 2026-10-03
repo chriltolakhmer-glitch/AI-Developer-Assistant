@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import atexit
 from unittest.mock import patch
 
 import numpy as np
@@ -26,6 +27,12 @@ class FakeTokenizer:
 
 
 class DeveloperModeTests(unittest.TestCase):
+    @staticmethod
+    def phase63_timing_diagnostic():
+        """Return the opt-in perf_counter harness without running it at import time."""
+        from tests.phase63_readiness_timing import main as run_diagnostic
+        return run_diagnostic
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.cleanup_temporary_repository)
@@ -50,6 +57,47 @@ class DeveloperModeTests(unittest.TestCase):
         self.workspace_path = self.root / "developer-workspace"
         self.research_root = self.root / "research-data"
         self.developer = DeveloperWorkspace(self.workspace_path, (self.research_root,))
+        prepared_methods = {
+            "test_operational_readiness_drift_expiry_and_compatibility",
+            "test_operational_readiness_missing_orphaned_links_and_read_only_isolation",
+            "test_operational_readiness_cli_and_manual_outstanding_items",
+        }
+        self._phase63_prepared_readiness = self._testMethodName in prepared_methods
+        if self._phase63_prepared_readiness:
+            fixture = self._prepared_readiness_fixture()
+            self.repository = fixture.repository
+            self.source_path = fixture.source_path
+            shutil.copytree(fixture.workspace_path, self.workspace_path)
+
+    @classmethod
+    def _prepared_readiness_fixture(cls):
+        """Build one immutable seed; each consumer copies it to its own workspace."""
+        fixture = getattr(cls, "_phase63_readiness_fixture", None)
+        if fixture is None:
+            fixture = cls("test_operational_readiness_complete_chain_closure_and_history")
+            fixture.setUp()
+            try:
+                fixture._operational_readiness_setup()
+            except BaseException:
+                fixture.doCleanups()
+                raise
+            cls._phase63_readiness_fixture = fixture
+            atexit.register(fixture.doCleanups)
+        return fixture
+
+    def _operational_readiness_fixture(self):
+        """Read the isolated prepared lifecycle or build a fresh integration chain."""
+        if not self._phase63_prepared_readiness:
+            return self._operational_readiness_setup()
+        from src.developer import readiness, assurance, strategic_governance
+        readiness_state = readiness._load(self.developer)
+        record = readiness._resolve(readiness_state, readiness_state["readiness"][-1]["readiness_id"])
+        assurance_state = assurance._load(self.developer)
+        source = assurance._resolve(assurance_state, assurance_state["assurances"][-1]["assurance_id"])
+        strategic_state = strategic_governance._load(self.developer)
+        strategic = strategic_governance._resolve(
+            strategic_state, strategic_state["governances"][-1]["governance_id"])
+        return record, source, strategic
 
     def cleanup_temporary_repository(self):
         # Windows can briefly retain Git-directory handles or pending entries.
@@ -4956,9 +5004,15 @@ class DeveloperModeTests(unittest.TestCase):
 
     def test_operational_readiness_complete_chain_closure_and_history(self):
         from src.developer import readiness as r
+        from src.developer.read_context import DeveloperReadContext
         record, _, _ = self._operational_readiness_setup()
         identifier = record["readiness_id"]
-        report = r.audit(self.developer, record["deployment_id"], record["decision_id"])
+        legacy_report = r._audit_with_context(self.developer, record["deployment_id"],
+                              record["decision_id"], None)
+        report = r._audit_with_context(self.developer, record["deployment_id"],
+                           record["decision_id"], DeveloperReadContext())
+        self.assertEqual({k: v for k, v in legacy_report.items() if k != "generated_at"},
+                         {k: v for k, v in report.items() if k != "generated_at"})
         self.assertEqual([], report["blocked"], report["blocked"])
         components = {i["component"] for i in report["evidence"]}
         self.assertTrue({"candidate", "review", "promotion", "configuration", "deployment", "operations",
@@ -5022,7 +5076,7 @@ class DeveloperModeTests(unittest.TestCase):
         from datetime import timedelta
         from src.developer import (readiness as r, governance_operations as o, strategic_governance as g,
                                    assurance, configuration, deployment, continuity, reliability)
-        record, source, strategic = self._operational_readiness_setup()
+        record, source, strategic = self._operational_readiness_fixture()
         identifier, did = record["readiness_id"], record["decision_id"]
         r.transition(self.developer, identifier, "review_required", "Review")
         r.review(self.developer, identifier, "readiness-owner", "Review evidence", "Review")
@@ -5059,7 +5113,7 @@ class DeveloperModeTests(unittest.TestCase):
                           DeveloperWorkspace(Path(local_workflow.__file__).resolve().parents[2] / "readiness")):
             with self.assertRaises(LocalWorkflowError):
                 r.audit(workspace)
-        record, _, _ = self._operational_readiness_setup()
+        record, _, _ = self._operational_readiness_fixture()
         before = {p: p.read_bytes() for p in self.workspace_path.rglob("*") if p.is_file()}
         r.status(self.developer, record["readiness_id"])
         r.audit(self.developer, record["deployment_id"], record["decision_id"])
@@ -5075,7 +5129,7 @@ class DeveloperModeTests(unittest.TestCase):
 
     def test_operational_readiness_cli_and_manual_outstanding_items(self):
         from src.developer import readiness as r
-        record, _, _ = self._operational_readiness_setup()
+        record, _, _ = self._operational_readiness_fixture()
         identifier = record["readiness_id"]
         def run(*args, expected=0):
             output = StringIO()
@@ -5130,6 +5184,54 @@ class DeveloperModeTests(unittest.TestCase):
                 r.history(self.developer, identifier)
         path.write_bytes(original)
         self.assertEqual(record, r.history(self.developer, identifier)["record"])
+
+    def test_read_context_invalidates_after_append_and_revalidates_corruption(self):
+        from src.developer import readiness as r
+        from src.developer import governance_operations as decisions, reliability
+        from src.developer.read_context import DeveloperReadContext
+        context = DeveloperReadContext()
+        report = r._audit_with_context(self.developer, "deployment-001", "decision-001", context)
+        readonly = r._readonly(self.developer)
+        readonly._read_context = context
+        first_load = r._load(readonly)
+        self.assertEqual([], first_load["events"])
+        first_load["events"].append({"mutated_first_result": True})
+        self.assertEqual([], r._load(readonly)["events"])
+        detached = r._load(readonly)
+        detached["events"].append({"not_shared": True})
+        self.assertEqual([], r._load(readonly)["events"])
+        snapshot = {"record": {"governance_id": "governance-001", "history": []}}
+        source = {"snapshot": snapshot, "digest": reliability._digest(snapshot)}
+        decisions._source_valid(source, context)
+        decisions._source_valid(source, context)
+        with self.assertRaises(ValueError):
+            decisions._source_valid({"snapshot": {"record": {"governance_id": "tampered", "history": []}},
+                                     "digest": source["digest"]}, context)
+        state = r._load(self.developer)
+        record = r._append(self.developer, state, "create", "retrieval-readiness-001",
+                           "Record missing chain", "developer", report,
+                           deployment_id="deployment-001", decision_id="decision-001", owner="owner")
+        record = r._append(self.developer, r._load(self.developer), "evidence", record["readiness_id"],
+                           "Append second integrity event", "developer", report)
+        refreshed = r._load(readonly)
+        self.assertEqual(record["readiness_id"], refreshed["readiness"][0]["readiness_id"])
+        self.assertEqual(2, len(refreshed["events"]))
+        paths = sorted(r._root(self.developer).glob("*.json"))
+        path = paths[0]
+        original = path.read_bytes()
+        for field, value in (("previous_digest", "changed-after-cache"), ("sequence", 9)):
+            event = json.loads(original)
+            event[field] = value
+            path.write_text(json.dumps(event), encoding="utf-8")
+            with self.assertRaises(LocalWorkflowError):
+                r._load(readonly)
+        path.write_bytes(original)
+        path.unlink()
+        with self.assertRaises(LocalWorkflowError):
+            r._load(readonly)
+        path.write_bytes(original)
+        self.assertEqual(record, r._load(readonly)["readiness"][0])
+        self.assertGreaterEqual(context.summary()["cache_hits"]["readiness"], 1)
 
 
     def test_phase61_configuration_excerpts_and_omission_diagnostics(self):

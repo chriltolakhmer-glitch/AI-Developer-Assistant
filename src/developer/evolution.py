@@ -7,6 +7,7 @@ from . import assurance, maturity, reliability, recovery_governance as governanc
 from . import assurance_operations as operations
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-evolution"
 STATES = ("planned", "reviewing", "approved", "implemented", "verified", "retired")
@@ -112,6 +113,7 @@ def _apply(state, event):
     record["history"].append({"previous_status": previous, "status": record["status"], **deepcopy(event)})
 
 
+@operation_scoped_load("evolution", _root)
 def _load(workspace):
     state = {"mode": MODE, "evolutions": [], "events": []}
     digest = None

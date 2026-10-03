@@ -8,6 +8,7 @@ import tempfile
 from . import configuration, promotion
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-retrieval-deployment"
 STAGES = {
@@ -79,7 +80,7 @@ def _eligible(workspace, config_id, expected=None):
 
 def _evidence(workspace, state, record, restoring=False):
     config, configs = _eligible(workspace, record["config_id"], record["configuration"])
-    readonly = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    readonly = promotion._readonly(workspace)
     policy = promotion.policy_check(readonly, config["source_candidate"])
     if policy["blocked"]:
         raise LocalWorkflowError("Deployment blocked by governance policy.")
@@ -182,6 +183,7 @@ def _apply(state, event):
     _history(record, stage, event)
 
 
+@operation_scoped_load("deployment", _root)
 def _load(workspace):
     state = {"mode": MODE, "selected": None, "deployments": [], "events": []}
     digest = None
@@ -349,7 +351,7 @@ def _rollback_availability(workspace, state, record):
 
 def deployment_governance_check(workspace, identifier):
     """Live operational checks only: never repair, approve, or alter a deployment."""
-    workspace = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = promotion._readonly(workspace)
     result = {"passed": [], "warnings": [], "blocked": []}
 
     def finding(bucket, check, detail):
@@ -407,7 +409,7 @@ def deployment_history(workspace):
 
 
 def deployment_inspect(workspace, identifier):
-    workspace = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = promotion._readonly(workspace)
     state = _load(workspace)
     record = _resolve(state, identifier)
     source = {"promotion_id": record["configuration"]["source_promotion"], "record": None}

@@ -8,6 +8,7 @@ import tempfile
 from . import configuration, deployment, promotion
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-retrieval-operations"
 TYPES = {"health_check", "incident", "recovery", "rollback", "investigation"}
@@ -98,6 +99,7 @@ def _apply(state, event, deployments):
     _history(record, event, status)
 
 
+@operation_scoped_load("operations", _root)
 def _load(workspace):
     directory = _root(workspace)
     deployments = deployment._load(workspace)
@@ -182,7 +184,7 @@ def incident_status(workspace):
 
 
 def deployment_health(workspace, identifier):
-    workspace = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = promotion._readonly(workspace)
     view = deployment.deployment_inspect(workspace, identifier)
     record, governance = view["deployment"], view["governance"]
     warnings = deepcopy(governance["warnings"])

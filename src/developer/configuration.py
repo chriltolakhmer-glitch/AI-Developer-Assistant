@@ -11,6 +11,7 @@ import tempfile
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
 from . import promotion
+from .read_context import operation_scoped_load
 
 MODE = "developer-retrieval-configuration"
 STATES = {
@@ -111,6 +112,7 @@ def _apply(state, event):
     record["status"] = target
 
 
+@operation_scoped_load("configuration", _root)
 def _load(workspace):
     state = {"mode": MODE, "configurations": [], "active": None, "events": []}
     digest = None
@@ -162,7 +164,7 @@ def _append(workspace, state, action, reason, actor, **payload):
 
 
 def _source(workspace, identifier):
-    workspace = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = promotion._readonly(workspace)
     source = promotion._resolve(promotion._load(workspace), identifier)
     if source["status"] != "promoted":
         raise LocalWorkflowError("Configuration requires a currently promoted source.")

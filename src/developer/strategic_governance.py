@@ -6,6 +6,7 @@ import tempfile
 from . import assurance, evolution, maturity, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-recovery-strategic-governance"
 STATES = ("planned", "reviewing", "approved", "active", "completed", "retired")
@@ -192,6 +193,7 @@ def _apply(state, event):
         road["history"].append({"previous_status": previous_roadmap_status, "current_status": road["status"], **deepcopy(event)})
 
 
+@operation_scoped_load("strategic_governance", _root)
 def _load(workspace):
     state = {"mode": MODE, "governances": [], "events": []}
     digest = None

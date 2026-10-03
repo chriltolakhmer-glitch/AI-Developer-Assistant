@@ -9,6 +9,7 @@ import tempfile
 from . import configuration, deployment, operations, promotion
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-retrieval-reliability"
 STATES = {"pending": {"checking", "expired"}, "checking": {"passed", "failed", "expired"},
@@ -26,7 +27,7 @@ def _root(workspace):
 
 def _readonly(workspace):
     _root(workspace)
-    return promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    return promotion._readonly(workspace)
 
 
 def _resolve(state, collection, identifier):
@@ -163,6 +164,7 @@ def _apply(state, event, *, copy_evidence=True):
     record["status"] = status
 
 
+@operation_scoped_load("reliability", _root)
 def _load(workspace):
     state = {"mode": MODE, "readiness": [], "plans": [], "events": []}
     digest = None

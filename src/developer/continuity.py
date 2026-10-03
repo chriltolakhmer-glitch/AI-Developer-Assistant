@@ -7,6 +7,7 @@ import tempfile
 from . import configuration, deployment, promotion, reliability
 from .local_workflow import LocalWorkflowError, _json_bytes
 from .optimization import _read
+from .read_context import operation_scoped_load
 
 MODE = "developer-retrieval-continuity"
 TYPES = {"configuration_failure", "deployment_failure", "rollback_unavailable", "history_loss"}
@@ -132,6 +133,7 @@ def _apply(state, event):
     continuity["validation_status"] = status
 
 
+@operation_scoped_load("continuity", _root)
 def _load(workspace):
     state = {"mode": MODE, "scenarios": [], "continuity": [], "events": []}
     digest = None
@@ -202,7 +204,7 @@ def disaster_check(workspace, identifier):
     scenario = _resolve(state, identifier)
     continuity = _continuity(state, scenario)
     knowledge = continuity["knowledge"]
-    workspace = promotion._ReadOnlyWorkspace(workspace.root, workspace.research_roots)
+    workspace = promotion._readonly(workspace)
     report = {"mode": MODE, "scenario_id": identifier, "deployment_id": scenario["deployment_id"],
               **reliability._report(), "evidence": {}}
     evidence = report["evidence"]

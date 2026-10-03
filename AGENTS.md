@@ -21,6 +21,12 @@ underlying issue, rerun that test and the appropriate focused suite, and only th
 rerun the final full gate. A timing report supplies reproduction commands; it does
 not automatically retry, repair, or suppress failures.
 
+For replay-heavy operational-readiness/governance integration tests, do not wrap
+an entire slow test or suite in `--profile`/cProfile. Use unprofiled targeted
+timing and, where internal attribution is needed, opt-in `perf_counter()` stage
+diagnostics with outputs outside the checkout. Profile only a narrowly bounded
+function after lightweight measurements establish it as the bottleneck.
+
 Do not delete tests, weaken assertions, change expected results to get a pass,
 convert tests to skips, or permanently disable expensive tests. Missing runtime
 dependencies are errors. Existing environment-dependent skips must be reported
