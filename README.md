@@ -14,7 +14,7 @@ This Master's thesis project builds and validates a working benchmark/retrieval 
 
 ## Current Phase
 
-**Phase 28 — Separate local developer mode.** The immutable v0.1.1 release remains the research-prototype baseline; the current source tree adds a personal local workflow without changing research behavior.
+**Main development through Phase 64 — change-aware developer assistance.** The immutable v0.1.1 tag remains the research-prototype release baseline. The moving `main` branch separately integrates developer-mode work through Phase 64; none of that work changes or becomes part of v0.1.1.
 
 | Area | Status |
 |---|---|
@@ -25,11 +25,11 @@ This Master's thesis project builds and validates a working benchmark/retrieval 
 
 The research workflow remains pinned, reproducible and governed separately. `prototype local` is for a developer's own local Python repository and writes rebuildable indexes, model cache, and personal run records only under a separate developer workspace. **This is a local developer workspace. Results are not benchmark results.** Local inputs do not become benchmark candidates, Humanize data is not read, and local runs are not research/evaluation records. The local parser currently supports Python `.py` files in existing Git working-tree roots; other file types are reported and ignored.
 
-Quick local flow: `prototype local scan PATH`, `prototype local index PATH`, then `prototype local query "question" --repository PATH`. Run `prototype local --help` for options or `prototype local demo` for a generated fixture. Dense indexing/query requires a local copy of the pinned model; model acquisition instructions and privacy/storage limits are in the [Phase 28 guide](docs/research/phase28-developer-mode.md).
+Quick local flow: `prototype local scan PATH`, `prototype local index PATH`, then `prototype local query "question" --repository PATH`. For an existing working-tree change, run `prototype local change-impact PATH` to inspect changed symbols, conservative static relationships, index freshness, and the Phase 62 affected-test plan without running tests or editing source. Run `prototype local --help` for options or `prototype local demo` for a generated fixture. Dense indexing/query requires a local copy of the pinned model; model acquisition instructions and privacy/storage limits are in the [Phase 28 guide](docs/research/phase28-developer-mode.md).
 
 See the [release guide](docs/research/release-guide.md) for clean installation, commands, tests and reproduction. The [Phase 26 external-user validation report](docs/research/phase26-external-user-validation.md) records the earlier v0.1.0 blocker, and the [Phase 26.1 verification report](docs/research/phase26.1-release-verification.md) records the verified v0.1.1 public release. The [v0.1.1 release page](https://github.com/chriltolakhmer-glitch/AI-Developer-Assistant/releases/tag/v0.1.1) hosts the exact-tag manifest asset. The [software prototype scope](docs/research/software-prototype-scope.md) documents component boundaries. Humanize remains frozen; benchmark expansion is deferred. This is not a production release.
 
-Use the [Phase 28 developer-mode guide](docs/research/phase28-developer-mode.md) for the personal workflow and storage/privacy boundary. Phase 28 changes are in this source tree and do not rewrite the published v0.1.1 tag.
+Use the [Phase 28 developer-mode guide](docs/research/phase28-developer-mode.md) for the personal workflow and storage/privacy boundary, and the [Phase 64 change-aware workflow](docs/research/phase64-change-aware-developer-assistance.md) for integrated change analysis. Main-branch developer changes do not rewrite the published v0.1.1 tag.
 
 ## Get the Release
 

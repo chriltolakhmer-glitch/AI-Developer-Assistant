@@ -130,14 +130,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Run separate research workflows or personal local developer experiments.\n\n"
             "Research commands: validate, evaluate, reproduce.\n"
-            "Developer commands: local scan, local inspect, local index, local query, local trace, local diagnose, "
+            "Developer commands: local scan, local inspect, local change-impact, local index, local query, local trace, local diagnose, "
             "local analyze-context, local compare, local regression, local explain, local evaluate, local demo.\n"
             f"{_DEVELOPER_MODE_NOTICE}"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Research: prototype validate | prototype evaluate --json | prototype reproduce RUN_ID\n"
-            "Developer: prototype local scan REPOSITORY | prototype local index REPOSITORY | "
+            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local index REPOSITORY | "
             "prototype local query QUESTION | prototype local trace QUERY | prototype local diagnose CASE | "
             "prototype local analyze-context QUERY | prototype local compare QUERY | prototype local regression REPOSITORY --cases PATH | "
             "prototype local explain QUESTION | prototype local evaluate REPOSITORY | prototype local demo"
@@ -209,6 +209,16 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
         command.add_argument("--json", action="store_true", help="Print developer diagnostics as JSON.")
         command.add_argument("--changes", action="store_true", help="Show changed files and stale-symbol diagnostics.")
+
+    change_impact = local_commands.add_parser(
+        "change-impact", help="Plan change-aware context and affected tests without modifying source."
+    )
+    change_impact.add_argument("repository", type=_path_argument, help="Existing local Git working-tree root.")
+    change_impact.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
+    change_impact.add_argument("--base", help="Include committed changes after this commit plus current worktree changes.")
+    change_impact.add_argument("--question", help="Retrieve relevant indexed code only when the index is current.")
+    change_impact.add_argument("--top-k", type=int, default=10, help="Maximum retrieval results (1-50; default: 10).")
+    change_impact.add_argument("--json", action="store_true", help="Print the stable change-impact payload as JSON.")
 
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
@@ -868,6 +878,48 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         return payload
     workspace_status = "existing" if workspace.exists() else "new; created only after separation checks"
     print(f"Developer workspace: {workspace.resolve()} ({workspace_status}; check local filesystem permissions)")
+    if options.local_command == "change-impact":
+        from src.developer.change_impact import analyze_change_impact
+        payload = analyze_change_impact(
+            developer, options.repository, base=options.base,
+            question=options.question, top_k=options.top_k,
+        )
+        repository = payload["repository"]
+        print(f"Repository: {repository['repository_path']}")
+        print(f"Commit: {repository['current_commit']}; status: {repository['status']}; "
+              f"index: {payload['index_freshness']['status']}")
+        print("Changes:")
+        if payload["changes"]["files"]:
+            for row in payload["changes"]["files"]:
+                rename = f" (from {row['old_path']})" if row.get("old_path") else ""
+                print(f"  {row['change_type']}: {row['path']}{rename}")
+        else:
+            print("  none")
+        print("Affected symbols:")
+        for row in payload["symbols"]:
+            print(f"  {row['change_type']}: {row['file_path']}:{row['start_line']}-{row['end_line']} "
+                  f"{row['qualified_symbol']}")
+        if not payload["symbols"]:
+            print("  none")
+        print("Potential static impact:")
+        for row in payload["relationships"]:
+            print(f"  {row['source_file']}:{row['source_symbol']} {row['relationship']} "
+                  f"{row['target_file']}:{row['target_symbol']}")
+        print(f"Unresolved relationships: {len(payload['unresolved_relationships'])}")
+        if options.question:
+            print(f"Relevant context: {payload['retrieval']['status']}; "
+                  f"{len(payload['retrieval']['query_evidence'])} retrieved results")
+        tests = payload["tests"]
+        print(f"Affected tests: {len(tests['selected_tests'])}; tier: {tests['tier']}; executed: no")
+        for selector in tests["selectors"]:
+            print(f"  {selector}")
+        print(f"Uncertainty: {'yes' if tests['uncertain'] else 'no'}")
+        print("Recommended next actions:")
+        for action in payload["recommended_actions"]:
+            label = action.get("command", action.get("tier", action["action"]))
+            print(f"  {label}: {action.get('reason', action['action'])}")
+        print(f"Developer run: {payload['run_id']}")
+        return payload
     if options.local_command == "inspect":
         payload = developer.inspect(options.repository, options.changes)
         inventory = payload["repository"]
