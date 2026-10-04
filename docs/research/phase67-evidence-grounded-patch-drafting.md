@@ -58,7 +58,7 @@ Phase 67 does NOT modify target source, apply patches, execute target tests, aut
 
 ## Validation record
 
-Phase 67 focused suite: 9 tests passed, 0 skipped, 0 failures, 0 errors (5.18 seconds). Phase 66 and CLI regressions: 21 passed, 0 skipped, 0 failures, 0 errors (14.35 seconds). Developer-mode component suite: 216 passed, 0 skipped, 0 failures, 0 errors (3,195.92 seconds). Changed-file planner: T2, 282 selected, 131 intentionally unselected, uncertainty false, executed false, T4 final gate required. Earlier full discovery completed with exit code 0: 414 tests, OK (skipped=2), 3,439.622 seconds; the two skips require EMBEDDING_MODEL_CACHE for real offline inference. A post-hardening full discovery rerun was interrupted after exceeding the previous runtime in one readiness test, so that rerun is incomplete and is not reported as passing.
+Phase 67 focused suite: 9 tests passed, 0 skipped, 0 failures, 0 errors (5.18 seconds). Phase 66 and CLI regressions: 21 passed, 0 skipped, 0 failures, 0 errors (14.35 seconds). Developer-mode component suite: 216 passed, 0 skipped, 0 failures, 0 errors (3,195.92 seconds). Changed-file planner: T2, 282 selected, 131 intentionally unselected, uncertainty false, executed false, T4 final gate required. Final synchronous full discovery from C:/Apps/.venv: exit code 0; 414 tests in 3,283.265 seconds; OK (skipped=2). The skips were test_real_model_offline_repeatability (requires EMBEDDING_MODEL_CACHE for real offline inference) and test_real_embedding_to_persisted_indexes_to_text_query_offline (requires EMBEDDING_MODEL_CACHE for offline integration).
 
 ## Pilot record
 
