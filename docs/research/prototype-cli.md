@@ -16,13 +16,14 @@ For a CLI-only install, `python -m pip install .` installs the declared base dep
 
 ## Separate modes
 
-The immutable v0.1.1 release tag remains unchanged. Main currently contains separate developer-mode work through Phase 64. The `local` command group operates on personal repositories without changing research data, retrieval methodology, Humanize artifacts, benchmark files, or research run records.
+The immutable v0.1.1 release tag remains unchanged. Main currently contains separate developer-mode work through Phase 65. The `local` command group operates on personal repositories without changing research data, retrieval methodology, Humanize artifacts, benchmark files, or research run records.
 
 **This is a local developer workspace. Results are not benchmark results.**
 
 | Research commands | Personal developer commands |
 |---|---|
 |  | `prototype local change-impact PATH [--base COMMIT] [--question TEXT]` — integrated read-only change, context, freshness, and test planning |
+|  | `prototype local plan-change PATH --goal TEXT [--base COMMIT]` — deterministic evidence-grounded implementation planning; no source edits, tests, reindexing, or patches |
 | `prototype validate` â€” fixed pinned-corpus preprocessing validation; never fetches | `prototype local scan PATH` â€” read-only local Git/Python inventory |
 | `prototype evaluate` â€” generated-fixture smoke evaluation, not a benchmark | `prototype local index PATH` â€” local parser/chunker and temporary dense + BM25 index |
 | `prototype reproduce RUN_ID` â€” replay research CLI smoke/validation records only | `prototype local query "question" [--repository PATH] [--top-k N]` â€” retrieve from a local index |
@@ -100,7 +101,7 @@ prototype evaluate --json
 
 The JSON form is suitable for shell capture or a lightweight reproducibility check. It is not a new benchmark result.
 
-### `prototype local scan|inspect|change-impact|index|query|trace|diagnose|analyze-context|compare|demo`
+### `prototype local scan|inspect|change-impact|plan-change|index|query|trace|diagnose|analyze-context|compare|demo`
 
 For a developer's existing local Python repository, use the separate developer workspace:
 
@@ -111,6 +112,8 @@ prototype local inspect "$repo" --json
 prototype local inspect "$repo" --changes --json
 prototype local change-impact "$repo"
 prototype local change-impact "$repo" --workspace C:/work/developer-workspace --base HEAD~1 --question "What authentication code is affected?" --top-k 10 --json
+prototype local plan-change "$repo" --goal "Add validation to the login token flow"
+prototype local plan-change "$repo" --workspace C:/work/developer-workspace --base HEAD~1 --goal "Improve stale-index errors" --top-k 10 --json
 prototype local index "$repo"
 prototype local query "Where is the session token loaded?" --repository "$repo"
 prototype local trace "Where is authentication handled?" --repository "$repo" --json
@@ -149,7 +152,7 @@ lists files, exclusion reasons, parser failures, chunk spans and token eligibili
 and identifies chunks present in a current index. Without a cached tokenizer,
 token eligibility is reported as unknown, not as supported coverage.
 
-`scan`, `inspect`, `change-impact`, `index`, `query`, `trace`, `diagnose`, `analyze-context`, `compare`, `explain`, and `evaluate` accept `--json`. Full diagnostics also stay
+`scan`, `inspect`, `change-impact`, `plan-change`, `index`, `query`, `trace`, `diagnose`, `analyze-context`, `compare`, `explain`, and `evaluate` accept `--json`. Full diagnostics also stay
 in `WORKSPACE/runs/RUN_ID/results.json`. Query records include raw lexical/vector
 contributions, the base fused score, metadata/test/container/diversity factors,
 final score and source provenance. These post-release developer preferences do
@@ -179,6 +182,26 @@ reported `prototype local test --changed` command explicitly after review. Stati
 imports, calls, callers, parents, and configuration references are conservative
 parsed-source evidence, not confirmation of runtime execution. See the
 [Phase 64 workflow report](phase64-change-aware-developer-assistance.md).
+
+`local plan-change REPOSITORY --goal TEXT` composes the Phase 64 change-impact
+payload rather than duplicating Git, parsing, relationship, freshness, retrieval,
+or Phase 62 test-selection logic. A current index permits direct and
+relationship-expanded goal evidence. A stale or missing index blocks retrieval,
+marks the plan limited or manual-review-required, and recommends an explicit
+`local index` command without running it. Clean repositories are supported:
+`current changes: none` remains separate from goal-derived proposed targets.
+
+Targets carry source references, roles, evidence categories, reasons, change
+status, current-index provenance, related symbols, and unresolved notes.
+Preserved behavior is stated conservatively from parsed callers/imports,
+configuration references, related tests, and current retrieval context. Tests to
+run are separate from tests to review or possible human-approved regression
+coverage. Validation proceeds from exact tests to affected modules/components,
+with T2/T3 only where required and T4 reserved for the final gate. The command
+never executes tests, edits source, drafts patches, reindexes, downloads a model,
+or changes governance state. Unsupported, ambiguous, omitted, stale, and missing
+evidence remains individually visible. See the
+[Phase 65 workflow report](phase65-evidence-grounded-implementation-planning.md).
 
 `local inspect --changes` compares current eligible-file hashes and symbols with
 the active developer snapshot. `local index` reports changed files, rebuild

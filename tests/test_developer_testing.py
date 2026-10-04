@@ -65,6 +65,11 @@ class DeveloperTestingTests(unittest.TestCase):
         self.assertFalse(report["executed"])
         self.assertFalse(testing.plan(tier="T4", final_gate=True)["execution_blocked"])
 
+    def test_full_gate_discovery_matches_catalog_without_package_requirement(self):
+        suite = testing._load_suite({"tier": "T4", "selectors": []})
+        self.assertEqual(sum(len(names) for names in testing.catalog().values()),
+                         suite.countTestCases())
+
     def test_changed_source_transitively_includes_dependent_tests(self):
         with patch.object(testing, "changed_files", return_value=["src/developer/context.py"]):
             result = testing.plan(changed=True)

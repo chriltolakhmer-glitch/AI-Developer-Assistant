@@ -9,6 +9,7 @@ from .local_workflow import (
     scan_local_repository,
 )
 from .change_impact import analyze_change_impact
+from .implementation_planning import plan_change
 
 __all__ = [
     "DEVELOPER_MODE_NOTICE",
@@ -18,4 +19,5 @@ __all__ = [
     "parse_local_repository",
     "scan_local_repository",
     "analyze_change_impact",
+    "plan_change",
 ]

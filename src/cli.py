@@ -130,14 +130,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Run separate research workflows or personal local developer experiments.\n\n"
             "Research commands: validate, evaluate, reproduce.\n"
-            "Developer commands: local scan, local inspect, local change-impact, local index, local query, local trace, local diagnose, "
+            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local index, local query, local trace, local diagnose, "
             "local analyze-context, local compare, local regression, local explain, local evaluate, local demo.\n"
             f"{_DEVELOPER_MODE_NOTICE}"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Research: prototype validate | prototype evaluate --json | prototype reproduce RUN_ID\n"
-            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local index REPOSITORY | "
+            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local plan-change REPOSITORY --goal TEXT | prototype local index REPOSITORY | "
             "prototype local query QUESTION | prototype local trace QUERY | prototype local diagnose CASE | "
             "prototype local analyze-context QUERY | prototype local compare QUERY | prototype local regression REPOSITORY --cases PATH | "
             "prototype local explain QUESTION | prototype local evaluate REPOSITORY | prototype local demo"
@@ -219,6 +219,16 @@ def _build_parser() -> argparse.ArgumentParser:
     change_impact.add_argument("--question", help="Retrieve relevant indexed code only when the index is current.")
     change_impact.add_argument("--top-k", type=int, default=10, help="Maximum retrieval results (1-50; default: 10).")
     change_impact.add_argument("--json", action="store_true", help="Print the stable change-impact payload as JSON.")
+
+    plan_change = local_commands.add_parser(
+        "plan-change", help="Create an evidence-grounded implementation plan without modifying source."
+    )
+    plan_change.add_argument("repository", type=_path_argument, help="Existing local Git working-tree root.")
+    plan_change.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
+    plan_change.add_argument("--base", help="Include committed changes after this commit plus current worktree changes.")
+    plan_change.add_argument("--goal", required=True, help="Developer goal used as the retrieval question.")
+    plan_change.add_argument("--top-k", type=int, default=10, help="Maximum retrieval results (1-50; default: 10).")
+    plan_change.add_argument("--json", action="store_true", help="Print the stable implementation-plan payload as JSON.")
 
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
@@ -918,6 +928,57 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         for action in payload["recommended_actions"]:
             label = action.get("command", action.get("tier", action["action"]))
             print(f"  {label}: {action.get('reason', action['action'])}")
+        print(f"Developer run: {payload['run_id']}")
+        return payload
+    if options.local_command == "plan-change":
+        from src.developer.implementation_planning import plan_change
+        payload = plan_change(
+            developer, options.repository, goal=options.goal,
+            base=options.base, top_k=options.top_k,
+        )
+        freshness = payload["change_impact"]["index_freshness"]["status"]
+        print(f"Goal: {payload['goal']}")
+        print(f"Repository: {payload['repository']['repository_path']}")
+        print(f"Plan status: {payload['status']}; index: {freshness}")
+        print("Current changes:")
+        changes = payload["change_impact"]["changes"]["files"]
+        if changes:
+            for row in changes:
+                print(f"  {row['change_type']}: {row['path']}")
+        else:
+            print("  none")
+        print("Likely implementation targets:")
+        for row in payload["implementation_targets"]:
+            location = f":{row['start_line']}-{row['end_line']}" if row["start_line"] else ""
+            symbol = f" {row['qualified_symbol']}" if row["qualified_symbol"] else ""
+            print(f"  {row['role']}: {row['file_path']}{location}{symbol}")
+            print(f"    Why: {'; '.join(row['reasons'])}")
+        if not payload["implementation_targets"]:
+            print("  none; manual review required")
+        print("Behavior to preserve:")
+        for row in payload["preserved_behavior"]:
+            print(f"  {row['statement']}")
+        if not payload["preserved_behavior"]:
+            print("  none established by current evidence")
+        print("Suggested implementation steps:")
+        for row in payload["implementation_steps"]:
+            print(f"  {row['order']}. {row['action']}")
+        tests = payload["tests"]
+        print(f"Tests: {len(tests['selected_tests'])} selected; tier: {tests['tier']}; executed: no")
+        for row in payload["tests_to_update_or_review"]:
+            print(f"  {row['classification']}: {row.get('test') or row.get('target', 'human decision')} — {row['reason']}")
+        print("Validation sequence:")
+        for row in payload["recommended_validation"]:
+            print(f"  {row['order']}. {row['selector']}")
+        print("Unresolved evidence:")
+        for row in payload["unresolved_evidence"]:
+            print(f"  {row['type']}: {row['action']}")
+        print("Limitations:")
+        for limitation in payload["limitations"]:
+            print(f"  {limitation}")
+        actions = payload["change_impact"]["recommended_actions"]
+        print("Recommended next action:")
+        print(f"  {actions[0].get('command', actions[0].get('action')) if actions else 'Review the plan before editing source.'}")
         print(f"Developer run: {payload['run_id']}")
         return payload
     if options.local_command == "inspect":

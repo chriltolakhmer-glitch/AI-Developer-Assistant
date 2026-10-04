@@ -38,11 +38,9 @@ def _git(root: Path, *arguments: str) -> bytes:
 
 
 def _change_set(root: Path, base: str | None) -> dict[str, Any]:
-    reference = "HEAD"
-    if base:
-        reference = os.fsdecode(
-            _git(root, "rev-parse", "--verify", "--end-of-options", base + "^{commit}")
-        ).strip()
+    reference = os.fsdecode(
+        _git(root, "rev-parse", "--verify", "--end-of-options", (base or "HEAD") + "^{commit}")
+    ).strip()
     raw = _git(root, "diff", "--name-status", "-z", "--find-renames", reference, "--")
     fields = [os.fsdecode(item) for item in raw.split(b"\0") if item]
     rows: list[dict[str, Any]] = []

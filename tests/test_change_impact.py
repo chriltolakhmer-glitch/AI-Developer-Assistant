@@ -79,6 +79,8 @@ class ChangeImpactTests(unittest.TestCase):
         app.write_text(app.read_text(encoding="utf-8").replace("support(value)", "support(value + '!')"), encoding="utf-8")
         self.git("add", "src/app.py")
         staged = self.analyze()
+        self.assertEqual(self.baseline, staged["repository"]["base_commit"])
+        self.assertEqual([], staged["changes"]["parser_failures"])
         self.assertIn("src/app.py", staged["changes"]["modified_files"])
         self.assertIn("run", {row["qualified_symbol"] for row in staged["symbols"]})
         self.assertTrue(any(row["relationship"] == "call_relationship" for row in staged["relationships"]))

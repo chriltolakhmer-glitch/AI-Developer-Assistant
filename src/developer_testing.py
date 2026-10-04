@@ -328,15 +328,22 @@ def _resource_profile(profiler) -> list[dict]:
     return sorted(rows, key=lambda row: row["cumulative_seconds"], reverse=True)
 
 
+def _load_suite(request: dict) -> unittest.TestSuite:
+    loader = unittest.TestLoader()
+    # Python 3.14 requires the start directory to be an importable package when
+    # top_level_dir is forced. This repository intentionally has no tests/__init__.py,
+    # so let discovery infer its top level, matching `unittest discover -s tests`.
+    return (loader.discover("tests", pattern="test*.py") if request["tier"] == "T4"
+            else loader.loadTestsFromNames(request["selectors"]))
+
+
 def worker(request: dict) -> dict:
     started = time.perf_counter()
     profiler = cProfile.Profile() if request.get("profile") else None
     if profiler:
         profiler.enable()
     with contextlib.redirect_stdout(sys.stderr):
-        loader = unittest.TestLoader()
-        suite = (loader.discover("tests", pattern="test*.py", top_level_dir=".") if request["tier"] == "T4"
-                 else loader.loadTestsFromNames(request["selectors"]))
+        suite = _load_suite(request)
         load_seconds = time.perf_counter() - started
         result = unittest.TextTestRunner(verbosity=2, resultclass=TimingResult).run(suite)
     if profiler:
