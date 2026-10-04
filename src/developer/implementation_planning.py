@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any
@@ -302,6 +303,47 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _proposed_action(impact: dict[str, Any], targets: list[dict[str, Any]], goal: str) -> dict[str, Any]:
+    target_paths = sorted({row["file_path"] for row in targets if row.get("file_path")})
+    target_symbols = [row["qualified_symbol"] for row in targets if row.get("qualified_symbol")]
+    evidence_refs = []
+    for row in targets:
+        evidence_refs.append({
+            "file_path": row.get("file_path"),
+            "symbol": row.get("qualified_symbol"),
+            "role": row.get("role"),
+            "evidence_types": row.get("evidence_types", []),
+            "current_index_evidence": row.get("current_index_evidence", False),
+            "reason": row["reasons"][0] if row.get("reasons") else None,
+        })
+    if not evidence_refs:
+        for row in impact["retrieval"].get("query_evidence", []):
+            evidence_refs.append({
+                "file_path": row.get("file_path"),
+                "symbol": row.get("symbol"),
+                "role": "retrieval_evidence",
+                "evidence_types": ["retrieval_evidence"],
+                "current_index_evidence": True,
+                "reason": row.get("reason"),
+            })
+    hashed = hashlib.sha256(f"{impact['repository']['repository_path']}\0{goal}".encode("utf-8")).hexdigest()[:12]
+    return {
+        "action_id": f"proposal-{hashed}",
+        "action_type": "implementation_plan",
+        "source_mode": "developer-local-implementation-plan",
+        "schema_version": "1.0",
+        "goal": goal,
+        "repository_path": impact["repository"]["repository_path"],
+        "target_paths": target_paths,
+        "target_symbols": target_symbols,
+        "evidence_refs": evidence_refs,
+        "authority_required": "human_approval_required",
+        "required_mutations": [],
+        "status": "proposed",
+        "execution_allowed": False,
+    }
+
+
 def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for item in impact["unresolved_relationships"]:
@@ -421,6 +463,7 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
             "index_freshness": impact["index_freshness"], "retrieval": impact["retrieval"],
             "recommended_actions": impact["recommended_actions"],
         },
+        "proposed_action": _proposed_action(impact, targets, goal),
         "implementation_targets": targets,
         "preserved_behavior": preserved,
         "implementation_steps": _steps(targets, preserved, guidance, impact),

@@ -115,6 +115,20 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertFalse(report["source_changes_made"])
         self.assertEqual(before, self.source_snapshot())
 
+    def test_phase66_typing_creates_reviewable_proposal_contract(self):
+        self.index()
+        report = self.plan()
+        proposal = report["proposed_action"]
+        self.assertEqual("implementation_plan", proposal["action_type"])
+        self.assertEqual("human_approval_required", proposal["authority_required"])
+        self.assertEqual("developer-local-implementation-plan", proposal["source_mode"])
+        self.assertEqual("1.0", proposal["schema_version"])
+        self.assertTrue(proposal["action_id"].startswith("proposal-"))
+        self.assertEqual("Add validation to run", proposal["goal"])
+        self.assertIn("src/app.py", proposal["target_paths"])
+        self.assertTrue(proposal["evidence_refs"])
+        self.assertEqual([], report["proposed_action"]["required_mutations"])
+
     def test_modified_code_reuses_relationship_and_test_planner_evidence(self):
         app = self.repository / "src" / "app.py"
         app.write_text(app.read_text(encoding="utf-8").replace("validate(value)", "validate(value.strip())"), encoding="utf-8")
