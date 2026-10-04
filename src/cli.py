@@ -130,14 +130,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Run separate research workflows or personal local developer experiments.\n\n"
             "Research commands: validate, evaluate, reproduce.\n"
-            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local index, local query, local trace, local diagnose, "
+            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local draft-patch, local index, local query, local trace, local diagnose, "
             "local analyze-context, local compare, local regression, local explain, local evaluate, local demo.\n"
             f"{_DEVELOPER_MODE_NOTICE}"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Research: prototype validate | prototype evaluate --json | prototype reproduce RUN_ID\n"
-            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local plan-change REPOSITORY --goal TEXT | prototype local index REPOSITORY | "
+            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local plan-change REPOSITORY --goal TEXT | prototype local draft-patch REPOSITORY --proposal-run-id RUN --patch-file DIFF | prototype local index REPOSITORY | "
             "prototype local query QUESTION | prototype local trace QUERY | prototype local diagnose CASE | "
             "prototype local analyze-context QUERY | prototype local compare QUERY | prototype local regression REPOSITORY --cases PATH | "
             "prototype local explain QUESTION | prototype local evaluate REPOSITORY | prototype local demo"
@@ -229,6 +229,15 @@ def _build_parser() -> argparse.ArgumentParser:
     plan_change.add_argument("--goal", required=True, help="Developer goal used as the retrieval question.")
     plan_change.add_argument("--top-k", type=int, default=10, help="Maximum retrieval results (1-50; default: 10).")
     plan_change.add_argument("--json", action="store_true", help="Print the stable implementation-plan payload as JSON.")
+
+    draft_patch = local_commands.add_parser(
+        "draft-patch", help="Validate and record a supplied unified-diff candidate without applying it."
+    )
+    draft_patch.add_argument("repository", type=_path_argument, help="Repository matching the Phase 66 proposal.")
+    draft_patch.add_argument("--proposal-run-id", required=True, help="Run ID containing the Phase 66 proposal.")
+    draft_patch.add_argument("--patch-file", required=True, type=_path_argument, help="Externally supplied unified diff candidate.")
+    draft_patch.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
+    draft_patch.add_argument("--json", action="store_true", help="Print the stable PatchDraft payload as JSON.")
 
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
@@ -985,6 +994,34 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         actions = payload["change_impact"]["recommended_actions"]
         print("Recommended next action:")
         print(f"  {actions[0].get('command', actions[0].get('action')) if actions else 'Review the plan before editing source.'}")
+        print(f"Developer run: {payload['run_id']}")
+        return payload
+    if options.local_command == "draft-patch":
+        from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+        proposal_run = developer._contained(workspace / "runs" / options.proposal_run_id / "results.json")
+        if not proposal_run.is_file():
+            raise LocalWorkflowError(f"Phase 66 proposal run was not found in this developer workspace: {options.proposal_run_id}")
+        proposal_payload = json.loads(proposal_run.read_text(encoding="utf-8"))
+        patch_path = options.patch_file.resolve()
+        if patch_path.is_relative_to(Path(options.repository).resolve()):
+            raise LocalWorkflowError("Candidate patch file must be outside the target repository.")
+        patch_text = patch_path.read_text(encoding="utf-8")
+        payload = draft_patch(developer, options.repository, proposal_payload.get("proposed_action"),
+                              SuppliedPatchGenerator(patch_text))
+        print("PATCH DRAFT — NOT APPLIED — HUMAN REVIEW REQUIRED")
+        print(f"Patch ID: {payload['patch_id']}")
+        print(f"Proposal ID: {payload['source_action_id']}")
+        print(f"Repository: {payload['repository_id']} at {payload['current_commit']}")
+        print(f"Status: {payload['status']}; apply allowed: no; execution allowed: no")
+        print("Target paths: " + (", ".join(payload['candidate_paths']) or "none"))
+        print("Unified diff:")
+        print(payload["patch_text"] or "(no valid patch retained)")
+        print("Unresolved evidence:")
+        for row in payload["unresolved_evidence"]:
+            print(f"  {row}")
+        print("Recommended validation:")
+        for row in payload["validation_requirements"]:
+            print(f"  {row}")
         print(f"Developer run: {payload['run_id']}")
         return payload
     if options.local_command == "inspect":
