@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
+import json
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any
@@ -19,6 +21,179 @@ _ROLE_PRIORITY = {
     "test_target": 4,
     "primary_target": 5,
 }
+
+_VALID_ACTION_TYPES = {"implementation_plan"}
+
+
+@dataclass(frozen=True, slots=True)
+class ProposedAction:
+    """A reviewable, non-mutating contract for a developer implementation proposal."""
+
+    action_id: str
+    action_type: str
+    source_mode: str
+    schema_version: str
+    goal: str
+    repository_path: str
+    repository_id: str
+    base_reference: str | None
+    base_commit: str | None
+    current_commit: str | None
+    working_tree_sha256: str | None
+    target_paths: tuple[str, ...] = ()
+    target_symbols: tuple[str, ...] = ()
+    evidence_refs: tuple[dict[str, Any], ...] = ()
+    unresolved_evidence: tuple[dict[str, Any], ...] = ()
+    authority_required: str = "human_approval_required"
+    required_mutations: tuple[str, ...] = ()
+    status: str = "proposed"
+    execution_allowed: bool = False
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    @staticmethod
+    def _stable_identity(*, goal: str, repository_id: str, base_reference: str | None,
+                         base_commit: str | None, current_commit: str | None,
+                         working_tree_sha256: str | None, target_paths: tuple[str, ...],
+                         target_symbols: tuple[str, ...], schema_version: str) -> str:
+        payload = {
+            "goal": " ".join(goal.split()),
+            "repository_id": repository_id,
+            "base_reference": base_reference,
+            "base_commit": base_commit,
+            "current_commit": current_commit,
+            "working_tree_sha256": working_tree_sha256,
+            "target_paths": tuple(sorted(target_paths)),
+            "target_symbols": tuple(sorted(target_symbols)),
+            "schema_version": schema_version,
+        }
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+        return f"proposal-{digest}"
+
+    @classmethod
+    def from_plan(cls, impact: dict[str, Any], targets: list[dict[str, Any]], goal: str,
+                  unresolved: list[dict[str, Any]]) -> ProposedAction:
+        repository = impact.get("repository", {})
+        repository_path = repository.get("repository_path") or ""
+        repository_id = repository.get("repository_id") or "unknown-repository"
+        base_reference = repository.get("base_reference") or "HEAD"
+        base_commit = repository.get("base_commit")
+        current_commit = repository.get("current_commit")
+        working_tree_sha256 = repository.get("working_tree_sha256") or impact.get("index_freshness", {}).get("working_tree_sha256")
+        target_paths = tuple(sorted({row["file_path"] for row in targets if row.get("file_path")}))
+        target_symbols = tuple(sorted({row["qualified_symbol"] for row in targets if row.get("qualified_symbol")}))
+        evidence_refs = []
+        for row in targets:
+            evidence_refs.append({
+                "file_path": row.get("file_path"),
+                "symbol": row.get("qualified_symbol"),
+                "role": row.get("role"),
+                "evidence_types": list(row.get("evidence_types", [])),
+                "current_index_evidence": bool(row.get("current_index_evidence", False)),
+                "reason": row["reasons"][0] if row.get("reasons") else None,
+            })
+        if not evidence_refs:
+            for row in impact.get("retrieval", {}).get("query_evidence", []):
+                evidence_refs.append({
+                    "file_path": row.get("file_path"),
+                    "symbol": row.get("symbol"),
+                    "role": "retrieval_evidence",
+                    "evidence_types": ["retrieval_evidence"],
+                    "current_index_evidence": True,
+                    "reason": row.get("reason"),
+                })
+
+        unresolved_refs = tuple({
+            "type": entry.get("type"),
+            "action": entry.get("action"),
+            "evidence": entry.get("evidence"),
+        } for entry in unresolved)
+
+        action_id = cls._stable_identity(
+            goal=goal,
+            repository_id=repository_id,
+            base_reference=base_reference,
+            base_commit=base_commit,
+            current_commit=current_commit,
+            working_tree_sha256=working_tree_sha256,
+            target_paths=target_paths,
+            target_symbols=target_symbols,
+            schema_version="1.0",
+        )
+        return cls(
+            action_id=action_id,
+            action_type="implementation_plan",
+            source_mode="developer-local-implementation-plan",
+            schema_version="1.0",
+            goal=" ".join(goal.split()),
+            repository_path=repository_path,
+            repository_id=repository_id,
+            base_reference=base_reference,
+            base_commit=base_commit,
+            current_commit=current_commit,
+            working_tree_sha256=working_tree_sha256,
+            target_paths=target_paths,
+            target_symbols=target_symbols,
+            evidence_refs=tuple(evidence_refs),
+            unresolved_evidence=unresolved_refs,
+            authority_required="human_approval_required",
+            required_mutations=(),
+            status="proposed",
+            execution_allowed=False,
+        )
+
+    def validate(self) -> None:
+        if not isinstance(self.goal, str) or not self.goal.strip():
+            raise ValueError("goal must be a non-empty string.")
+        if self.status != "proposed":
+            raise ValueError("Phase 66 proposal status must remain 'proposed'.")
+        if self.execution_allowed is not False:
+            raise ValueError("Phase 66 proposals must never allow execution.")
+        if self.required_mutations:
+            raise ValueError("Phase 66 proposals must not require mutations.")
+        if self.authority_required != "human_approval_required":
+            raise ValueError("Phase 66 requires human approval before execution.")
+        if self.action_type not in _VALID_ACTION_TYPES:
+            raise ValueError(f"Unsupported Phase 66 action type: {self.action_type!r}")
+        if not self.repository_id or not self.repository_path:
+            raise ValueError("repository identity and path are required for a valid proposal.")
+        for path in self.target_paths:
+            if not path or path.startswith(("/", "\\")):
+                raise ValueError(f"Target path must be repository-relative: {path!r}")
+            pure = PurePosixPath(path)
+            if ".." in pure.parts:
+                raise ValueError(f"Target path escapes the repository: {path!r}")
+        for ref in self.evidence_refs:
+            if not isinstance(ref, dict):
+                raise ValueError("Evidence references must be mapping objects.")
+            if not isinstance(ref.get("evidence_types", []), list):
+                raise ValueError("Evidence reference 'evidence_types' must be a list.")
+        if not self.action_id.startswith("proposal-"):
+            raise ValueError("Proposal ID must begin with 'proposal-'.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action_id": self.action_id,
+            "action_type": self.action_type,
+            "source_mode": self.source_mode,
+            "schema_version": self.schema_version,
+            "goal": self.goal,
+            "repository_path": self.repository_path,
+            "repository_id": self.repository_id,
+            "base_reference": self.base_reference,
+            "base_commit": self.base_commit,
+            "current_commit": self.current_commit,
+            "working_tree_sha256": self.working_tree_sha256,
+            "target_paths": list(self.target_paths),
+            "target_symbols": list(self.target_symbols),
+            "evidence_refs": [dict(ref) for ref in self.evidence_refs],
+            "unresolved_evidence": [dict(item) for item in self.unresolved_evidence],
+            "authority_required": self.authority_required,
+            "required_mutations": list(self.required_mutations),
+            "status": self.status,
+            "execution_allowed": self.execution_allowed,
+        }
 
 
 def _test_path(selector: str) -> str:
@@ -303,47 +478,6 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _proposed_action(impact: dict[str, Any], targets: list[dict[str, Any]], goal: str) -> dict[str, Any]:
-    target_paths = sorted({row["file_path"] for row in targets if row.get("file_path")})
-    target_symbols = [row["qualified_symbol"] for row in targets if row.get("qualified_symbol")]
-    evidence_refs = []
-    for row in targets:
-        evidence_refs.append({
-            "file_path": row.get("file_path"),
-            "symbol": row.get("qualified_symbol"),
-            "role": row.get("role"),
-            "evidence_types": row.get("evidence_types", []),
-            "current_index_evidence": row.get("current_index_evidence", False),
-            "reason": row["reasons"][0] if row.get("reasons") else None,
-        })
-    if not evidence_refs:
-        for row in impact["retrieval"].get("query_evidence", []):
-            evidence_refs.append({
-                "file_path": row.get("file_path"),
-                "symbol": row.get("symbol"),
-                "role": "retrieval_evidence",
-                "evidence_types": ["retrieval_evidence"],
-                "current_index_evidence": True,
-                "reason": row.get("reason"),
-            })
-    hashed = hashlib.sha256(f"{impact['repository']['repository_path']}\0{goal}".encode("utf-8")).hexdigest()[:12]
-    return {
-        "action_id": f"proposal-{hashed}",
-        "action_type": "implementation_plan",
-        "source_mode": "developer-local-implementation-plan",
-        "schema_version": "1.0",
-        "goal": goal,
-        "repository_path": impact["repository"]["repository_path"],
-        "target_paths": target_paths,
-        "target_symbols": target_symbols,
-        "evidence_refs": evidence_refs,
-        "authority_required": "human_approval_required",
-        "required_mutations": [],
-        "status": "proposed",
-        "execution_allowed": False,
-    }
-
-
 def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for item in impact["unresolved_relationships"]:
@@ -452,18 +586,20 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
         limitations.append("Goal retrieval is unavailable or invalid because the developer index is not current; the plan is incomplete.")
     if status == "manual_review_required":
         limitations.append("Repository evidence is insufficient to identify a supported implementation target; human inspection is required.")
+    proposal = ProposedAction.from_plan(impact, targets, goal, unresolved)
     payload = {
         "mode": "developer-local-implementation-plan",
         "status": status,
         "goal": goal,
         "repository": impact["repository"],
         "change_impact": {
+            "repository": impact["repository"],
             "run_id": impact["run_id"], "changes": impact["changes"], "symbols": impact["symbols"],
             "relationships": impact["relationships"], "unresolved_relationships": impact["unresolved_relationships"],
             "index_freshness": impact["index_freshness"], "retrieval": impact["retrieval"],
             "recommended_actions": impact["recommended_actions"],
         },
-        "proposed_action": _proposed_action(impact, targets, goal),
+        "proposed_action": proposal.to_dict(),
         "implementation_targets": targets,
         "preserved_behavior": preserved,
         "implementation_steps": _steps(targets, preserved, guidance, impact),

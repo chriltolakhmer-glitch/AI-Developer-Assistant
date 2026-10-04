@@ -12,7 +12,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.cli import main
-from src.developer.implementation_planning import plan_change
+from src.developer.implementation_planning import ProposedAction, plan_change
 from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError
 
 
@@ -128,6 +128,58 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertIn("src/app.py", proposal["target_paths"])
         self.assertTrue(proposal["evidence_refs"])
         self.assertEqual([], report["proposed_action"]["required_mutations"])
+
+    def test_phase66_proposal_is_typed_and_stable(self):
+        self.index()
+        report = self.plan()
+        proposal = ProposedAction.from_plan(
+            report["change_impact"],
+            report["implementation_targets"],
+            report["goal"],
+            report["unresolved_evidence"],
+        )
+        self.assertIsInstance(proposal, ProposedAction)
+        self.assertEqual("proposed", proposal.status)
+        self.assertFalse(proposal.execution_allowed)
+        self.assertEqual("human_approval_required", proposal.authority_required)
+        self.assertEqual("implementation_plan", proposal.action_type)
+        self.assertEqual(report["goal"], proposal.goal)
+        self.assertIn("src/app.py", proposal.target_paths)
+        self.assertTrue(proposal.evidence_refs)
+        self.assertTrue(proposal.unresolved_evidence)
+        self.assertEqual(proposal.to_dict()["action_id"], proposal.action_id)
+
+        duplicated = ProposedAction.from_plan(
+            report["change_impact"],
+            report["implementation_targets"],
+            report["goal"],
+            report["unresolved_evidence"],
+        )
+        self.assertEqual(proposal.action_id, duplicated.action_id)
+
+    def test_phase66_proposal_identity_changes_when_state_changes(self):
+        self.index()
+        report = self.plan()
+        first = ProposedAction.from_plan(
+            report["change_impact"],
+            report["implementation_targets"],
+            report["goal"],
+            report["unresolved_evidence"],
+        )
+
+        app = self.repository / "src" / "app.py"
+        app.write_text(app.read_text(encoding="utf-8").replace("return validate(value) if TOKEN_MODE else value",
+                                                            "return validate(value.strip()) if TOKEN_MODE else value"),
+                      encoding="utf-8")
+        changed = self.plan()
+        second = ProposedAction.from_plan(
+            changed["change_impact"],
+            changed["implementation_targets"],
+            changed["goal"],
+            changed["unresolved_evidence"],
+        )
+        self.assertNotEqual(first.action_id, second.action_id)
+        self.assertEqual("proposed", second.status)
 
     def test_modified_code_reuses_relationship_and_test_planner_evidence(self):
         app = self.repository / "src" / "app.py"

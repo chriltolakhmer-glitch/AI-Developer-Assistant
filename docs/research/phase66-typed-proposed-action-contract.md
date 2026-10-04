@@ -2,29 +2,37 @@
 
 ## Outcome
 
-Phase 66 formalizes the read-only implementation planner as a reviewable proposal object rather than an ad hoc dictionary. The planner still does not edit source, execute tests, or mutate the repository. It records a `proposed_action` object inside the stable `developer-local-implementation-plan` payload so a human reviewer can inspect the evidence, target scope, and approval boundary before any implementation work begins.
+Phase 66 introduces a typed, review-only proposal contract for the developer implementation planner. The planner still does not edit source, write patches, execute tests, or perform repository mutations. It emits a `proposed_action` object inside the `developer-local-implementation-plan` payload so a reviewer can inspect the target scope, repository identity, evidence basis, and approval boundary before any implementation work begins.
 
 ```python
 {
   "proposed_action": {
-    "action_id": "proposal-<hash>",
+    "action_id": "proposal-<stable-hash>",
     "action_type": "implementation_plan",
     "source_mode": "developer-local-implementation-plan",
     "schema_version": "1.0",
     "goal": "Add validation to run",
     "repository_path": "C:/.../repository",
+    "repository_id": "<repository-id>",
+    "base_reference": "HEAD",
+    "base_commit": "<sha>",
+    "current_commit": "<sha>",
+    "working_tree_sha256": "<sha256>",
     "target_paths": ["src/app.py"],
     "target_symbols": ["run"],
-    "evidence_refs": [
-      {
-        "file_path": "src/app.py",
-        "symbol": "run",
-        "role": "primary_target",
-        "evidence_types": ["retrieval_evidence", "changed_code"],
-        "current_index_evidence": true,
-        "reason": "..."
-      }
-    ],
+    "evidence_refs": [{
+      "file_path": "src/app.py",
+      "symbol": "run",
+      "role": "primary_target",
+      "evidence_types": ["retrieval_evidence", "changed_code"],
+      "current_index_evidence": true,
+      "reason": "..."
+    }],
+    "unresolved_evidence": [{
+      "type": "index_not_current",
+      "action": "manual_review_required",
+      "evidence": "..."
+    }],
     "authority_required": "human_approval_required",
     "required_mutations": [],
     "status": "proposed",
@@ -35,62 +43,73 @@ Phase 66 formalizes the read-only implementation planner as a reviewable proposa
 
 ## Contract purpose
 
-The `proposed_action` object is a bounded, reviewable representation of the planned change. It makes the intent explicit and separates the planning evidence from any later execution authority.
+The `proposed_action` object is the canonical planning contract. It is narrow, explicit, serializable, and testable. It separates the plan from the later execution layer and captures the repository and evidence state that justified the recommendation.
 
 The contract is intentionally conservative:
 
-- It describes the goal, repository, and candidate targets.
-- It records direct evidence references used in the plan.
-- It remains read-only and human-approval gated.
-- It never declares mutation intent or execution permission.
-- It remains JSON-ready for inspection, logs, and future review tools.
+- it records the goal, repository identity, and base state
+- it preserves the current target paths and symbols
+- it stores evidence references and unresolved evidence for review
+- it keeps the review object non-mutating and execution-blocked
+- it remains serializable to JSON for logs, audits, or future review tooling
 
 ## Required fields
 
 The Phase 66 contract includes the following fields:
 
-- `action_id`: stable proposal identifier derived from repository path and goal.
-- `action_type`: fixed value `implementation_plan`.
-- `source_mode`: fixed value `developer-local-implementation-plan`.
-- `schema_version`: fixed version `1.0`.
-- `goal`: the original developer goal text.
-- `repository_path`: repository root the proposal was generated from.
-- `target_paths`: sorted list of relevant implementation file paths.
-- `target_symbols`: relevant qualified symbols from the implementation targets.
-- `evidence_refs`: evidence-backed file/symbol references with role and basis.
-- `authority_required`: fixed value `human_approval_required`.
-- `required_mutations`: empty array for the planning-only phase.
-- `status`: fixed value `proposed`.
-- `execution_allowed`: fixed value `false`.
+- `action_id`: stable identifier derived from the proposal state, prefixed with `proposal-`
+- `action_type`: fixed value `implementation_plan`
+- `source_mode`: fixed value `developer-local-implementation-plan`
+- `schema_version`: fixed value `1.0`
+- `goal`: normalized developer goal text
+- `repository_path`: repository root associated with the proposal
+- `repository_id`: stable repository identity used to bind the proposal to the underlying repo state
+- `base_reference`: repository reference used as the baseline, defaulting to `HEAD`
+- `base_commit`: commit at the baseline reference when available
+- `current_commit`: current repository commit when available
+- `working_tree_sha256`: working-tree fingerprint used to detect state changes
+- `target_paths`: sorted repository-relative paths for the planned implementation scope
+- `target_symbols`: relevant qualified symbols from the implementation targets
+- `evidence_refs`: direct evidence references used to justify the proposal
+- `unresolved_evidence`: unresolved or ambiguous evidence, preserved explicitly instead of hidden
+- `authority_required`: fixed value `human_approval_required`
+- `required_mutations`: always empty for Phase 66
+- `status`: fixed value `proposed`
+- `execution_allowed`: fixed value `false`
+
+## Validation and serialization rules
+
+The proposal must validate at construction-time and at serialization boundaries where necessary:
+
+- `status` must remain `proposed`
+- `execution_allowed` must remain `false`
+- `required_mutations` must remain empty
+- `authority_required` must remain `human_approval_required`
+- `action_type` must be limited to `implementation_plan`
+- `repository_id` and `repository_path` are required
+- target paths must remain repository-relative and may not escape the repository root
+- `action_id` must start with `proposal-`
+- evidence references must be mapping objects with a list-valued `evidence_types`
+
+The deterministic identity is derived from repository state and proposal scope rather than timestamps or randomness. If the repository state, base commit, working-tree hash, goal, or target set changes, the proposal identity changes as well.
 
 ## Boundary behavior
 
-This contract does not grant execution authority. It is not a patch, not an approval, and not a deferred action to be auto-executed. The planner may recommend validation order, but it does not run tests or mutate the repository.
+This contract does not grant execution authority and is not a patch or approval record. The planner may identify recommended validation steps, but it does not execute them and it does not mutate the repository. The proposal exists to make the review boundary explicit and to preserve unresolved evidence without pretending it is a certainty.
 
-This matches the Phase 65 behavioral boundary: planning remains read-only, local-source evidence remains the only source of truth, and dynamic behavior still needs human confirmation.
+This remains consistent with the read-only Phase 65 planning boundary: repository evidence is the source of truth, human approval is required before any later execution work, and the plan remains separate from any future implementation execution layer.
 
 ## Evidence handling
 
-The contract binds the proposal to the same evidence set used by the implementation plan:
+The proposal binds to the same evidence set used by the implementation plan and preserves uncertainty instead of flattening it away:
 
 - changed-code evidence
 - static relationship evidence
-- retrieval evidence from a current local index
-- related context and unresolved diagnostics
+- retrieval evidence from the current local index
+- unresolved diagnostics and ambiguous relationships
 
-If the plan has no direct implementation targets, the contract falls back to current retrieval evidence for reviewability. If no evidence is available, the proposal still records the repository and the goal while leaving `target_paths` and `target_symbols` empty.
+When no direct targets are available, the proposal still keeps goal, repository, and base-state metadata. When there is no evidence, the proposal remains valid but keeps `target_paths`, `target_symbols`, and `evidence_refs` empty while preserving `unresolved_evidence` for review.
 
-## Validation status
+## Completion gate
 
-Focused coverage confirms the proposal contract is created and remains reviewable without creating any mutation instructions or execution authority. The Phase 66 unit test verifies:
-
-- the contract is present under `proposed_action`
-- the action type, authority, source mode, and schema are stable
-- the proposal identifier is generated deterministically
-- the goal and target paths are captured
-- evidence references are populated
-- no mutations are required at plan time
-
-## Completion boundary
-
-Phase 66 is complete when the reviewable proposal contract is part of the plan payload and validated by the affected tests. It remains intentionally separate from any later phase that may support controlled patch drafting or execution.
+Phase 66 is complete when the reviewable proposal contract is part of the plan payload, the deterministic identity and repository/base metadata are present, unresolved evidence is preserved, and the affected validation tests pass. The contract remains intentionally separate from future execution phases and should not be promoted into an execution or mutation object.

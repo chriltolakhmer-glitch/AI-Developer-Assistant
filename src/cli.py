@@ -960,6 +960,12 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             print(f"  {row['statement']}")
         if not payload["preserved_behavior"]:
             print("  none established by current evidence")
+        proposal = payload["proposed_action"]
+        print("Proposed action:")
+        print(f"  status: {proposal['status']}")
+        print(f"  execution allowed: {'yes' if proposal['execution_allowed'] else 'no'}")
+        print(f"  human approval required: {'yes' if proposal['authority_required'] == 'human_approval_required' else 'no'}")
+        print(f"  proposal ID: {proposal['action_id']}")
         print("Suggested implementation steps:")
         for row in payload["implementation_steps"]:
             print(f"  {row['order']}. {row['action']}")
