@@ -23,6 +23,7 @@ _EXPECTED_RUNS = {
     "approval": ("review-patch", "developer-local-patch-authorization"),
     "execution": ("apply-patch", "developer-local-patch-application"),
     "observation": ("test-applied-patch", "developer-local-test-observation"),
+    "verification": ("verify-execution", "developer-local-execution-verification"),
 }
 
 

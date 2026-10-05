@@ -270,6 +270,14 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_execution.add_argument("--workspace", type=_path_argument, help="External workspace containing the linked records.")
     verify_execution.add_argument("--json", action="store_true", help="Print the stable verification summary as JSON.")
 
+    evaluate_recovery = local_commands.add_parser(
+        "evaluate-recovery", help="Evaluate bounded follow-up for one exact Phase 71 verification; never execute it."
+    )
+    evaluate_recovery.add_argument("repository", type=_path_argument, help="Repository bound to the verification.")
+    evaluate_recovery.add_argument("--verification-run-id", required=True, help="Exact Phase 71 verification run ID.")
+    evaluate_recovery.add_argument("--workspace", type=_path_argument, help="External workspace containing Phase 71 evidence.")
+    evaluate_recovery.add_argument("--json", action="store_true", help="Print stable recovery evaluation JSON.")
+
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
     query.add_argument("--repository", type=_path_argument, help="Select an indexed repository when multiple exist.")
@@ -1111,6 +1119,20 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             print(f"Verification: {payload['verification_id']}; execution: {payload['execution_id']}")
             print(f"Deviations: {len(payload['deviations'])}; unresolved uncertainty: {len(payload['unresolved_uncertainty'])}")
             print(f"External evidence record: {payload['run_id']}; human review required: yes")
+        return payload
+    if options.local_command == "evaluate-recovery":
+        from src.developer.recovery_evaluation import evaluate_recovery
+
+        payload = evaluate_recovery(developer, options.repository, options.verification_run_id)
+        if options.json:
+            print(json.dumps({"notice": _DEVELOPER_MODE_NOTICE, **payload}, indent=2, sort_keys=True))
+        else:
+            print(f"RECOVERY EVALUATION: {payload['classification']}; verification: {payload['verification_status']}")
+            print("Candidate actions: " + ", ".join(payload["candidate_actions"]))
+            print("Blocking conditions: " + (", ".join(payload["blocking_conditions"]) or "none"))
+            print(f"Rollback feasible: {'yes' if payload['rollback_feasible'] else 'no'}; "
+                  f"retry eligible: {'yes' if payload['retry_eligible'] else 'no'}")
+            print(f"Human approval required: yes; execution authorized: no; external record: {payload['run_id']}")
         return payload
     if options.local_command == "inspect":
         payload = developer.inspect(options.repository, options.changes)
