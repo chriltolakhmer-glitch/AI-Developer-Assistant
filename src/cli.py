@@ -130,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Run separate research workflows or personal local developer experiments.\n\n"
             "Research commands: validate, evaluate, reproduce.\n"
-            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local draft-patch, local approve-patch, local reject-patch, local index, local query, local trace, local diagnose, "
+            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local draft-patch, local approve-patch, local reject-patch, local apply-patch, local index, local query, local trace, local diagnose, "
             "local analyze-context, local compare, local regression, local explain, local evaluate, local demo.\n"
             f"{_DEVELOPER_MODE_NOTICE}"
         ),
@@ -247,6 +247,12 @@ def _build_parser() -> argparse.ArgumentParser:
         decision.add_argument("--approved-by", default="local-developer", help="Audit label only; no identity verification.")
         decision.add_argument("--note", help="Optional short review note.")
         decision.add_argument("--json", action="store_true", help="Print the typed decision record as JSON.")
+
+    apply_patch = local_commands.add_parser("apply-patch", help="Apply one exact Phase 68 approved patch; never run tests or commit.")
+    apply_patch.add_argument("repository", type=_path_argument, help="Repository bound to the authorization.")
+    apply_patch.add_argument("--authorization-run-id", required=True, help="External Phase 68 authorization run ID.")
+    apply_patch.add_argument("--workspace", type=_path_argument, help="External developer workspace containing the authorization.")
+    apply_patch.add_argument("--json", action="store_true", help="Print the stable execution observation as JSON.")
 
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
@@ -1052,6 +1058,17 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             print(f"Review note: {payload['note']}")
         print("Executed: no; source changed: no; target tests run: no")
         print(f"Developer run: {payload['run_id']}")
+        return payload
+    if options.local_command == "apply-patch":
+        from src.developer.patch_application import apply_approved_patch
+        payload = apply_approved_patch(developer, options.repository, options.authorization_run_id)
+        if options.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print("PATCH APPLIED â€” TARGET TESTS NOT RUN; NO COMMIT OR STAGING")
+            print(f"Execution: {payload['execution_id']}; authorization: {payload['authorization_id']}")
+            print("Files: " + ", ".join(payload["files_changed"]))
+            print(f"External execution record: {payload['run_id']}")
         return payload
     if options.local_command == "inspect":
         payload = developer.inspect(options.repository, options.changes)
