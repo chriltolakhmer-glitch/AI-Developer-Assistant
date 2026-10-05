@@ -18,7 +18,7 @@ The executor reads the canonical Phase 68 run and validates the frozen typed rec
 
 ## Repository-state validation
 
-The checkout is rescanned immediately before mutation. The bound commit and working-tree fingerprint must match, and Git status must be clean. The executor captures HEAD, index bytes, refs, status, and target pre-image bytes. It rechecks these bindings immediately before the first write.
+The checkout is rescanned immediately before mutation. The bound commit and working-tree fingerprint must match, and Git status must be clean. The executor captures HEAD, semantic Git index entries (`git ls-files --stage -z`), refs, status, and target pre-image bytes. It rechecks these bindings immediately before the first write. Refreshable physical index stat-cache bytes are not treated as staged content.
 
 ## Application mechanism
 
@@ -38,11 +38,11 @@ Each resulting file is staged in its target directory and atomically renamed int
 
 ## Post-application verification
 
-After writes, the executor rereads every target and compares bytes with the computed post-image. It checks the Git changed-path set against the authorized paths, and confirms HEAD, index bytes, and refs are unchanged. The actual Git diff is recorded for human review; exact post-image bytes are the verification authority.
+After writes, the executor rereads every target and compares bytes with the computed post-image. It checks the Git changed-path set against the authorized paths, and confirms HEAD, semantic index entries, and refs are unchanged. The actual Git diff is recorded for human review; exact post-image bytes are the verification authority.
 
 ## Unexpected-change detection
 
-Any target byte mismatch, changed-path mismatch, HEAD/index/ref change, or write error makes execution fail. Only after all checks pass is an `applied` result recorded.
+Any target byte mismatch, changed-path mismatch, HEAD/semantic-index/ref change, or write error makes execution fail. Only after all checks pass is an `applied` result recorded.
 
 ## Atomicity
 
@@ -50,7 +50,7 @@ All target pre-images and expected post-images are held before mutation. Each ta
 
 ## Failure restoration
 
-Restoration is verified by rereading all target bytes and comparing them to pre-images, then checking Git status, HEAD, index, and refs against the captured state. A failure observation is written externally when possible. If restoration cannot be proven, the command reports `restoration verification FAILED`. Preflight failures need no restoration because no target was changed.
+Restoration is verified by rereading all target bytes and comparing them to pre-images, then checking Git status, HEAD, semantic index entries, and refs against the captured state. A failure observation is written externally when possible. If restoration cannot be proven, the command reports `restoration verification FAILED`. Preflight failures need no restoration because no target was changed.
 
 ## Scope/path safety
 

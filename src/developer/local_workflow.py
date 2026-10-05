@@ -1582,6 +1582,24 @@ def _git(root: Path, arguments: list[str]) -> bytes:
     return result.stdout
 
 
+def _git_index_state(repository: Path) -> bytes:
+    """Return deterministic staged entries, excluding Git's refreshable stat cache."""
+    root = Path(repository).expanduser().resolve(strict=True)
+    env = os.environ.copy()
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env=env,
+    )
+    if result.returncode:
+        detail = os.fsdecode(result.stderr).strip() or "Git returned no diagnostic"
+        raise LocalWorkflowError(f"Cannot inspect semantic Git index state for '{root}': {detail}")
+    return result.stdout
+
+
 def _resolve_repository_argument(repository: Path) -> Path:
     try:
         root = Path(repository).expanduser().resolve(strict=True)

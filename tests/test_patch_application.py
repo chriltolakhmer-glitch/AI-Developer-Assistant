@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch as mock_patch
 
-from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError, scan_local_repository
+from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError, _git_index_state, scan_local_repository
 from src.developer.patch_application import _apply_text, apply_approved_patch
 from src.developer.patch_authorization import record_patch_decision
 from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
@@ -55,25 +55,42 @@ class PatchApplicationTests(unittest.TestCase):
 
     def snapshot(self):
         return (self.a.read_bytes(), self.b.read_bytes(), self.git("rev-parse", "HEAD"),
-                (self.repo / ".git" / "index").read_bytes(), self.git("status", "--porcelain=v1"))
+                _git_index_state(self.repo), self.git("status", "--porcelain=v1"))
 
     def execute(self, decision):
         return apply_approved_patch(self.workspace, self.repo, decision["run_id"])
 
     def test_exact_authorized_patch_applies_and_records_external_observation(self):
         _, decision = self.make_authorization()
-        head, index = self.git("rev-parse", "HEAD"), (self.repo / ".git" / "index").read_bytes()
+        head, index = self.git("rev-parse", "HEAD"), _git_index_state(self.repo)
         result = self.execute(decision)
         self.assertEqual(b"def run():\n    return 2\n", self.a.read_bytes())
         self.assertEqual(b"VALUE = 2\n", self.b.read_bytes())
         self.assertEqual(["a.py", "b.py"], result["files_changed"])
         self.assertEqual(head, self.git("rev-parse", "HEAD"))
-        self.assertEqual(index, (self.repo / ".git" / "index").read_bytes())
+        self.assertEqual(index, _git_index_state(self.repo))
         self.assertFalse(result["tests_executed"])
         self.assertFalse(result["git_commit_created"])
         self.assertFalse(result["git_staging_performed"])
         self.assertTrue((self.workspace.root / "runs" / result["run_id"] / "results.json").is_file())
         self.assertFalse((self.repo / "runs").exists())
+
+    def test_index_refresh_metadata_does_not_change_semantic_entries(self):
+        before = _git_index_state(self.repo)
+        self.a.touch()
+        self.git("update-index", "--refresh")
+        self.assertEqual(before, _git_index_state(self.repo))
+
+    def test_staged_content_changes_semantic_index_and_blocks_application(self):
+        _, decision = self.make_authorization()
+        before = _git_index_state(self.repo)
+        self.a.write_bytes(b"def run():\n    return 9\n")
+        self.git("add", "a.py")
+        after = _git_index_state(self.repo)
+        self.assertNotEqual(before, after)
+        with self.assertRaises(LocalWorkflowError):
+            self.execute(decision)
+        self.assertEqual(after, _git_index_state(self.repo))
 
     def test_replay_is_rejected_without_source_change(self):
         _, decision = self.make_authorization()

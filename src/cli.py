@@ -254,6 +254,13 @@ def _build_parser() -> argparse.ArgumentParser:
     apply_patch.add_argument("--workspace", type=_path_argument, help="External developer workspace containing the authorization.")
     apply_patch.add_argument("--json", action="store_true", help="Print the stable execution observation as JSON.")
 
+    test_applied = local_commands.add_parser("test-applied-patch", help="Explicitly run bounded unittests for an unchanged Phase 69 application.")
+    test_applied.add_argument("repository", type=_path_argument, help="Repository matching the Phase 69 application.")
+    test_applied.add_argument("--execution-run-id", required=True, help="Exact successful Phase 69 application run ID.")
+    test_applied.add_argument("--workspace", type=_path_argument, help="External developer workspace containing Phase 69 evidence.")
+    test_applied.add_argument("--test", action="append", default=[], help="Exact known unittest identity; may be repeated.")
+    test_applied.add_argument("--json", action="store_true", help="Print the structured test observation as JSON.")
+
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
     query.add_argument("--repository", type=_path_argument, help="Select an indexed repository when multiple exist.")
@@ -1069,6 +1076,20 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             print(f"Execution: {payload['execution_id']}; authorization: {payload['authorization_id']}")
             print("Files: " + ", ".join(payload["files_changed"]))
             print(f"External execution record: {payload['run_id']}")
+        return payload
+    if options.local_command == "test-applied-patch":
+        from src.developer.test_execution import execute_applied_patch_tests
+        payload = execute_applied_patch_tests(developer, options.repository, options.execution_run_id,
+                                              tests=tuple(options.test))
+        if options.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"TEST OBSERVATION: {payload['status'].upper()}; {payload['tests_run']} run, "
+                  f"{payload['passed']} passed, {payload['failures']} failed, "
+                  f"{payload['errors']} errors, {payload['skipped']} skipped")
+            print(f"Observation: {payload['observation_id']}; source execution: {payload['source_execution_id']}")
+            print(f"External record: {payload['run_id']}; unexpected repository changes: "
+                  f"{payload['unexpected_repository_changes']}")
         return payload
     if options.local_command == "inspect":
         payload = developer.inspect(options.repository, options.changes)

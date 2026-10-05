@@ -12,7 +12,8 @@ import subprocess
 import tempfile
 from typing import Any
 
-from .local_workflow import DeveloperWorkspace, LocalWorkflowError, _digest, _git, _json_bytes, scan_local_repository
+from .local_workflow import (DeveloperWorkspace, LocalWorkflowError, _digest, _git, _git_index_state,
+                             _json_bytes, scan_local_repository)
 from .patch_authorization import AuthorizationRecord, _read_patch_run, validate_exact_patch_authorization
 from .patch_drafting import PatchDraft, validate_unified_diff
 
@@ -164,11 +165,8 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
     staged: dict[str, tuple[Path, bytes, bytes]] = {}
     # Capture repository-level Git state before computing any post-images.
     head_before = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip()
-    index_path = Path(os.fsdecode(_git(root, ["rev-parse", "--git-path", "index"])).strip())
-    if not index_path.is_absolute():
-        index_path = root / index_path
     status_before = _status(root)
-    index_before = index_path.read_bytes()
+    index_before = _git_index_state(root)
     refs_before = _git(root, ["for-each-ref", "--format=%(refname) %(objectname)"]).decode()
     if status_before.strip():
         raise LocalWorkflowError("Repository has Git changes outside the approved state; PATCH NOT APPLIED.")
@@ -203,13 +201,13 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
     validate_exact_patch_authorization(record, draft, root)
     head_check = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip()
     refs_check = _git(root, ["for-each-ref", "--format=%(refname) %(objectname)"]).decode()
-    if (_status(root).strip() or index_path.read_bytes() != index_before
+    if (_status(root).strip() or _git_index_state(root) != index_before
             or head_check != head_before or refs_check != refs_before):
         raise LocalWorkflowError("Repository drifted before mutation; PATCH NOT APPLIED.")
     written: list[str] = []
     def repo_state() -> tuple[str, bytes, str, str]:
         return (_git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip(),
-                index_path.read_bytes(), _status(root).decode(),
+                _git_index_state(root), _status(root).decode(),
                 _git(root, ["for-each-ref", "--format=%(refname) %(objectname)"]).decode())
 
     def restore_and_verify() -> bool:
