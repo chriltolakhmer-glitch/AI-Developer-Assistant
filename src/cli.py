@@ -197,7 +197,7 @@ def _build_parser() -> argparse.ArgumentParser:
     local_commands = local.add_subparsers(dest="local_command", required=True)
     from src.developer_testing import add_arguments
     for name in ("test", "test-timing"):
-        test_command = local_commands.add_parser(name, help="Select and time developer tests; full discovery is a final gate only.")
+        test_command = local_commands.add_parser(name, help="Select developer tests with development, phase, or exhaustive validation gates.")
         add_arguments(test_command)
     for name, help_text in (
         ("scan", "Read-only scan of a local Git repository."),

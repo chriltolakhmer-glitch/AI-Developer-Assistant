@@ -25,6 +25,15 @@ EXPENSIVE = ("embedding", "vector_retrieval", "bm25_retrieval", "hybrid_search",
              "parent_child_retrieval", "pipeline_validation", "repository_scanner", "rrf")
 TIERS = {"T0": "Fast validation", "T1": "Changed component", "T2": "Developer workflow",
          "T3": "Affected expensive subsystem", "T4": "Final full regression gate"}
+GATES = ("development", "phase", "exhaustive")
+HIGH_RISK_PATHS = (
+    "src/developer_testing.py", "tests/test_developer_testing.py", "src/cli.py", "src/__init__.py",
+    "src/developer/governance.py", "src/developer/readiness.py", "src/developer/reliability.py",
+    "src/developer/strategic_governance.py", "src/developer/recovery_governance.py",
+    "src/developer/governance_operations.py", "src/developer/configuration.py",
+    "src/developer/read_context.py", "src/developer/*journal*", "src/developer/*storage*",
+    "src/config.py", "src/developer/repository.py", "src/scanner/repository_scanner.py",
+)
 COMPONENTS = {
     "developer": (DEVELOPER,),
     "testing": ("tests.test_developer_testing", "tests.test_cli", "tests.test_tracking"),
@@ -123,14 +132,85 @@ def _dependencies(root: Path) -> dict[str, set[str]]:
     return graph
 
 
+def _dynamic_loading(path: Path) -> bool:
+    """Conservatively flag Python loading patterns the static import graph cannot follow."""
+    if not path.is_file() or path.suffix != ".py":
+        return False
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "load_tests":
+            return True
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in {"__import__", "exec", "eval"}:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr == "import_module":
+                return True
+    return False
+
+
+def _risk_reasons(files: list[str], root: Path) -> list[str]:
+    import fnmatch
+    reasons = []
+    source_roots = {"/".join(Path(file.replace("\\", "/")).parts[:2])
+                    for file in files if file.replace("\\", "/").startswith("src/")}
+    if len(source_roots) >= 3:
+        reasons.append("Broad cross-cutting change spans at least three src package roots.")
+    for file in files:
+        normalized = file.replace("\\", "/")
+        if (any(fnmatch.fnmatch(normalized, pattern) for pattern in HIGH_RISK_PATHS)
+                or normalized.startswith(("src/developer/governance/", "src/developer/readiness/"))
+                or (normalized.startswith("src/") and normalized.endswith("/__init__.py"))
+                or (normalized.startswith("src/") and Path(normalized).name in {"serialization.py", "integrity.py"})):
+            reasons.append(f"High-risk architecture path: {file}.")
+        path = root / Path(file)
+        if path.suffix == ".py" and path.exists() and _dynamic_loading(path):
+            reasons.append(f"Dynamic loading in changed file: {file}.")
+    return sorted(set(reasons))
+
+
+def _test_component(name: str) -> str:
+    module = ".".join(name.split(".")[:2])
+    aliases = {DEVELOPER: "developer", "tests.test_developer_testing": "testing",
+               "tests.test_patch_drafting": "patch-drafting",
+               "tests.test_implementation_planning": "implementation-planning",
+               "tests.test_cli": "cli", "tests.test_config": "configuration"}
+    return aliases.get(module, module.removeprefix("tests.test_").replace("_", "-"))
+
+
+def _test_cost_class(name: str) -> str:
+    module = ".".join(name.split(".")[:2])
+    if "real_model_offline" in name or "real_embedding_to_persisted" in name:
+        return "environment_dependent"
+    if any(token in name for token in (
+            "complete_chain_closure", "incomplete_chain_invalid_transitions",
+            "drift_expiry_and_compatibility", "missing_orphaned_links",
+            "cli_and_manual_outstanding_items")):
+        return "exhaustive_lifecycle"
+    if module.removeprefix("tests.test_") in EXPENSIVE:
+        return "expensive_integration"
+    if module in FAST:
+        return "fast_unit"
+    return "normal_integration"
+
+
 def plan(*, root: Path = ROOT, changed=False, base=None, component=None,
-         tests=(), tier=None, final_gate=False) -> dict:
+         tests=(), tier=None, final_gate=False, gate=None) -> dict:
     inventory = catalog(root)
     all_tests = {name for names in inventory.values() for name in names}
     diagnostics, files, selected_modules = [], [], set()
     uncertain = False
+    if gate not in (None, *GATES):
+        raise ValueError(f"Unknown validation gate: {gate}")
     if sum((bool(changed), bool(component), bool(tests), bool(tier))) > 1:
         raise ValueError("Choose one of --changed, --component, --test, or --tier.")
+    if gate in {"development", "phase"} and not changed:
+        changed = True
+    if gate == "exhaustive":
+        tier = "T4"
+        final_gate = True
+    elif gate == "phase" and any((component, tests, tier)):
+        raise ValueError("The phase gate derives selection from changed files; do not combine it with another selector.")
     if base and not changed:
         raise ValueError("--base requires --changed.")
     if tests:
@@ -207,22 +287,44 @@ def plan(*, root: Path = ROOT, changed=False, base=None, component=None,
         selected_tier = "T3"
     if tests and DEVELOPER in tests and selected_tier != "T3":
         selected_tier = "T2"
+    risk_reasons = _risk_reasons(files, root) if gate == "phase" else []
+    if risk_reasons:
+        selected = set(all_tests)
+        selected_modules = set(inventory)
+        uncertain = True
+        diagnostics.extend(risk_reasons)
+        diagnostics.append("Risk policy escalates this phase gate to exhaustive discovery.")
     if selected == all_tests:
         selected_tier = "T4"
         diagnostics.append("Selection covers the complete test inventory; execution is a final gate even when every dependency is known.")
     if final_gate and selected_tier != "T4":
         raise ValueError("--final-gate is only valid for a T4 selection.")
-    return {"tier": selected_tier, "tier_description": TIERS[selected_tier],
+    phase_mapped_modules = set(selected_modules)
+    if gate == "phase" and selected_tier != "T4":
+        diagnostics.append("Phase gate runs changed-file dependents plus the fast safety suite; exhaustive acceptance remains a separate gate.")
+        selected.update(test for module in FAST for test in inventory.get(module, []))
+        selected_modules.update(set(FAST) & set(inventory))
+    effective_gate = gate or ("exhaustive" if selected_tier == "T4" else "development")
+    affected_modules = phase_mapped_modules
+    selected_details = [{"test": name, "component": _test_component(name),
+                         "cost_class": _test_cost_class(name),
+                         "reason": ("Complete exhaustive inventory." if selected_tier == "T4" else
+                                    "Mandatory fast safety module." if gate == "phase" and
+                                    name.split(".")[1] in FAST and name.split(".")[1] not in affected_modules else
+                                    "Selected through static changed-file dependency mapping." if changed else
+                                    "Selected by explicit test/component/tier selector.")}
+                        for name in sorted(selected)]
+    return {"tier": selected_tier, "tier_description": TIERS[selected_tier], "gate": effective_gate,
             "changed_files": files, "selected_tests": sorted(selected),
+            "selected_details": selected_details, "risk_reasons": risk_reasons,
             "selectors": sorted(selected_modules) if not tests else sorted(
                 name for name in set(tests) if not any(name.startswith(other + ".") for other in tests if other != name)),
-            "not_selected": [{"test": name, "reason": "Outside this selection; remains covered by the final full gate."}
+            "not_selected": [{"test": name, "reason": "Outside this selection; remains covered by exhaustive acceptance."}
                              for name in sorted(all_tests - selected)],
             "diagnostics": diagnostics, "uncertain": uncertain,
-            "execution_blocked": selected_tier == "T4" and not final_gate,
-            "required_followup": ["T2 developer suite", "T4 final gate"]
-            if (tests and DEVELOPER in selected_modules and DEVELOPER not in tests) or component == "testing"
-            else ([] if selected_tier == "T4" else ["T4 final gate"])}
+            "execution_blocked": selected_tier == "T4" and not final_gate and gate != "phase",
+            "exhaustive_required": selected_tier == "T4",
+            "required_followup": ([] if selected_tier == "T4" or gate == "phase" else ["T4 exhaustive acceptance"])}
 
 
 def category(name: str) -> str:
@@ -381,6 +483,7 @@ def add_arguments(parser):
     group.add_argument("--test", action="append", default=[], help="Dotted module, class, or method; repeatable.")
     group.add_argument("--tier", choices=TIERS)
     parser.add_argument("--base", help="Compare all changes with this commit, including worktree changes.")
+    parser.add_argument("--gate", choices=GATES, help="Named validation policy: development, changed-file phase gate, or exhaustive inventory.")
     parser.add_argument("--final-gate", action="store_true", help="Explicitly execute a T4 selection.")
     parser.add_argument("--dry-run", action="store_true", help="Print selection without importing or running tests.")
     parser.add_argument("--profile", action="store_true", help="Measure resource call counts/times with cProfile (adds overhead).")
@@ -394,7 +497,7 @@ def run_command(options) -> int:
         raise ValueError("--report must be a new file outside the source checkout.")
     try:
         selection = plan(changed=options.changed, base=options.base, component=options.component,
-                         tests=options.test, tier=options.tier, final_gate=options.final_gate)
+                         tests=options.test, tier=options.tier, final_gate=options.final_gate, gate=options.gate)
     except SyntaxError as error:
         raise ValueError(f"Cannot inventory tests/source with invalid syntax: {error}") from error
     print(f"{selection['tier']}: {len(selection['selected_tests'])} selected; {len(selection['not_selected'])} intentionally not selected.", file=sys.stderr)

@@ -113,6 +113,81 @@ class DeveloperTestingTests(unittest.TestCase):
         result = testing.plan(tests=[method, "tests.test_config", "tests.test_config"])
         self.assertEqual(["tests.test_config"], result["selectors"])
 
+    def test_phase_gate_selects_changed_dependents_and_fast_safety_tests_once(self):
+        with patch.object(testing, "changed_files", return_value=["src/developer/patch_drafting.py"]):
+            result = testing.plan(gate="phase")
+        self.assertEqual("phase", result["gate"])
+        self.assertEqual("T2", result["tier"])
+        self.assertIn("tests.test_patch_drafting", result["selectors"])
+        self.assertIn("tests.test_implementation_planning", result["selectors"])
+        self.assertIn("tests.test_developer_testing", result["selectors"])
+        # The static import graph conservatively selects the developer module via CLI coupling.
+        self.assertIn(testing.DEVELOPER, result["selectors"])
+        self.assertFalse(result["exhaustive_required"])
+        self.assertEqual(len(result["selected_tests"]), len(set(result["selected_tests"])))
+        self.assertTrue(all(row["cost_class"] for row in result["selected_details"]))
+        self.assertTrue(set(testing.FAST).issubset(result["selectors"]))
+
+    def test_development_gate_stays_focused_and_does_not_add_phase_safety_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "tests").mkdir()
+            (root / "src" / "changed.py").write_text("VALUE = 1\n")
+            (root / "tests" / "test_affected.py").write_text(
+                "import unittest\nfrom src import changed\nclass T(unittest.TestCase):\n def test_value(self): self.assertEqual(1, changed.VALUE)\n")
+            (root / "tests" / "test_other.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n def test_other(self): pass\n")
+            with patch.object(testing, "changed_files", return_value=["src/changed.py"]):
+                result = testing.plan(root=root, gate="development")
+        self.assertEqual("development", result["gate"])
+        self.assertEqual(["tests.test_affected"], result["selectors"])
+        self.assertNotIn("tests.test_other", result["selectors"])
+        self.assertNotIn("tests.test_config", result["selectors"])
+
+    def test_phase_gate_escalates_governance_and_test_runner_changes(self):
+        for path in ("src/developer/readiness.py", "src/developer_testing.py",
+                     "src/__init__.py", "requirements-lock.txt", "src/config.py"):
+            with self.subTest(path=path), patch.object(testing, "changed_files", return_value=[path]):
+                result = testing.plan(gate="phase")
+                self.assertEqual("T4", result["tier"])
+                self.assertTrue(result["exhaustive_required"])
+                self.assertFalse(result["execution_blocked"])
+
+    def test_phase_gate_escalates_changes_across_three_source_roots(self):
+        reasons = testing._risk_reasons(
+            ["src/developer/patch_drafting.py", "src/retrieval/vector_index.py", "src/config.py"],
+            testing.ROOT)
+        self.assertTrue(any("three src package roots" in reason for reason in reasons))
+
+    def test_phase_gate_dynamic_loading_escalates_and_labels_uncertainty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "src" / "loader.py"
+            target.parent.mkdir()
+            target.write_text("import importlib\nmodule = importlib.import_module(name)\n")
+            (root / "tests").mkdir()
+            (root / "tests" / "test_loader.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n def test_load(self): pass\n")
+            with patch.object(testing, "changed_files", return_value=["src/loader.py"]):
+                result = testing.plan(root=root, gate="phase")
+        self.assertEqual("T4", result["tier"])
+        self.assertTrue(any("Dynamic loading" in reason for reason in result["risk_reasons"]))
+
+    def test_exhaustive_gate_is_explicit_and_matches_discovery_inventory(self):
+        result = testing.plan(gate="exhaustive")
+        suite = testing._load_suite(result)
+        self.assertEqual("T4", result["tier"])
+        self.assertFalse(result["execution_blocked"])
+        self.assertEqual(sum(map(len, testing.catalog().values())), suite.countTestCases())
+
+    def test_phase_gate_classifies_known_slow_lifecycle_tests(self):
+        with patch.object(testing, "changed_files", return_value=["src/developer/readiness.py"]):
+            result = testing.plan(gate="phase")
+        by_name = {row["test"]: row["cost_class"] for row in result["selected_details"]}
+        slow = next(name for name in by_name if "complete_chain_closure" in name)
+        self.assertEqual("exhaustive_lifecycle", by_name[slow])
+
     def test_git_detection_staged_unstaged_deleted_renamed_untracked_and_base(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -244,6 +319,12 @@ class DeveloperTestingTests(unittest.TestCase):
             execute.assert_not_called()
             self.assertEqual(0, status)
             self.assertFalse(json.loads(output.getvalue())["executed"])
+        output = StringIO()
+        with patch.object(testing, "execute") as execute, redirect_stdout(output), redirect_stderr(StringIO()):
+            status = main(["local", "test", "--gate", "phase", "--dry-run", "--json"])
+        execute.assert_not_called()
+        self.assertEqual(0, status)
+        self.assertEqual("phase", json.loads(output.getvalue())["gate"])
 
     def test_cli_propagates_failure_exit_and_rejects_internal_artifacts(self):
         from src.cli import main

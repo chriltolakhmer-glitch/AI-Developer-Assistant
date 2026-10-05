@@ -1,25 +1,51 @@
 # Local developer testing policy
 
-Use this policy for future development phases in this checkout.
+Use this policy for future development phases in this checkout. Validation has
+three distinct purposes: repeated development feedback, one phase-completion
+gate, and optional or risk-required exhaustive acceptance.
 
-During development, run the directly affected test first, then the affected
-component tests. Run `tests.test_developer_mode` when developer workflow behavior
-is affected. Use `prototype local test --dry-run --changed` to inspect selection;
-use `--test tests.MODULE.CLASS.METHOD` for the smallest reproduction. The default
-`prototype local test` is T0, not a substitute for component or final validation.
+During development, run the directly affected method first, then the affected
+component tests. Use `prototype local test --test tests.MODULE.CLASS.METHOD` for
+the smallest reproduction and `prototype local test --changed --dry-run` to
+inspect static changed-file selection. The default `prototype local test` is T0
+feedback; it is not phase-completion evidence.
 
-Full discovery is a final gate only. Complete targeted tests, the developer suite
-when applicable, and preservation checks before running once:
+For normal phase completion, run exactly one changed-file phase gate:
 
 ```text
-python -m unittest discover -s tests -v
+prototype local test --gate phase
 ```
 
-Never use full discovery as the normal development loop. If it fails, reproduce
-the failing test independently, determine whether the change caused it, fix the
-underlying issue, rerun that test and the appropriate focused suite, and only then
-rerun the final full gate. A timing report supplies reproduction commands; it does
-not automatically retry, repair, or suppress failures.
+It selects affected test modules and adds the fast safety modules. It may complete
+without full discovery when mapping is known and the selection is smaller than the
+complete inventory. Do not mechanically run the full developer module and then
+full discovery. If the phase gate itself escalates to exhaustive discovery, that
+single execution is the completion and exhaustive gate.
+
+Exhaustive acceptance is available as `prototype local test --gate exhaustive`
+or the direct command `python -m unittest discover -s tests -v`. It is mandatory
+for release/milestone acceptance, test runner or dependency mapping changes,
+package initializers, governance/readiness core, journal/storage and shared
+configuration/serialization changes, dynamic loading, unknown or unsupported
+mapping, a change touching three or more distinct `src` package roots, or an
+explicit exhaustive request. Unknown selection always escalates; it never reduces
+coverage. Static AST mapping follows
+relative and function-local imports but cannot prove dynamic imports, plugin
+loading, external services or arbitrary non-Python dependencies. Review those
+limits and use the stronger gate when relevant.
+
+T2 remains useful for debugging, failure localization, a focused developer
+workflow change, or when developer integration coverage is the affected gate and
+exhaustive discovery is not required. It adds no coverage when immediately
+followed by exhaustive discovery because `tests.test_developer_mode` is included
+in full discovery. A timing report supplies reproduction commands; it does not
+automatically retry, repair, or suppress failures.
+
+If a gate fails, reproduce the failing test independently, determine whether the
+change caused it, fix the underlying issue, and rerun the target plus the
+appropriate affected validation. Rerun exhaustive acceptance only if it was
+required by policy or the fix changes its risk/coverage basis; do not rerun a
+complete suite as ritual duplication.
 
 For replay-heavy operational-readiness/governance integration tests, do not wrap
 an entire slow test or suite in `--profile`/cProfile. Use unprofiled targeted
@@ -43,5 +69,5 @@ optimization. Verify `git diff --check`, intended paths and protected identities
 before the final gate and check-in. Existing dirty changes remain separately
 attributed; do not include unrelated changes in the phase commit.
 
-See [Phase 62](docs/research/phase62-developer-test-execution-optimization.md)
-for tiers, selection limits, measured costs and command examples.
+See [the test-gating architecture redesign](docs/research/test-gating-architecture-redesign.md)
+for gate semantics, selection limits, risk rules and the evidence behind this policy.
