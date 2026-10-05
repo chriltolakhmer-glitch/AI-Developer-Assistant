@@ -130,14 +130,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Run separate research workflows or personal local developer experiments.\n\n"
             "Research commands: validate, evaluate, reproduce.\n"
-            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local draft-patch, local index, local query, local trace, local diagnose, "
+            "Developer commands: local scan, local inspect, local change-impact, local plan-change, local draft-patch, local approve-patch, local reject-patch, local index, local query, local trace, local diagnose, "
             "local analyze-context, local compare, local regression, local explain, local evaluate, local demo.\n"
             f"{_DEVELOPER_MODE_NOTICE}"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Research: prototype validate | prototype evaluate --json | prototype reproduce RUN_ID\n"
-            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local plan-change REPOSITORY --goal TEXT | prototype local draft-patch REPOSITORY --proposal-run-id RUN --patch-file DIFF | prototype local index REPOSITORY | "
+            "Developer: prototype local scan REPOSITORY | prototype local change-impact REPOSITORY | prototype local plan-change REPOSITORY --goal TEXT | prototype local draft-patch REPOSITORY --proposal-run-id RUN --patch-file DIFF | prototype local approve-patch REPOSITORY --patch-run-id RUN | prototype local reject-patch REPOSITORY --patch-run-id RUN | prototype local index REPOSITORY | "
             "prototype local query QUESTION | prototype local trace QUERY | prototype local diagnose CASE | "
             "prototype local analyze-context QUERY | prototype local compare QUERY | prototype local regression REPOSITORY --cases PATH | "
             "prototype local explain QUESTION | prototype local evaluate REPOSITORY | prototype local demo"
@@ -238,6 +238,15 @@ def _build_parser() -> argparse.ArgumentParser:
     draft_patch.add_argument("--patch-file", required=True, type=_path_argument, help="Externally supplied unified diff candidate.")
     draft_patch.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
     draft_patch.add_argument("--json", action="store_true", help="Print the stable PatchDraft payload as JSON.")
+
+    for name in ("approve-patch", "reject-patch"):
+        decision = local_commands.add_parser(name, help="Record an explicit local decision for one exact PatchDraft; never apply it.")
+        decision.add_argument("repository", type=_path_argument, help="Repository bound to the Phase 67 PatchDraft.")
+        decision.add_argument("--patch-run-id", required=True, help="Run ID containing the Phase 67 PatchDraft.")
+        decision.add_argument("--workspace", type=_path_argument, help="Developer workspace containing the draft run.")
+        decision.add_argument("--approved-by", default="local-developer", help="Audit label only; no identity verification.")
+        decision.add_argument("--note", help="Optional short review note.")
+        decision.add_argument("--json", action="store_true", help="Print the typed decision record as JSON.")
 
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
@@ -1022,6 +1031,26 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         print("Recommended validation:")
         for row in payload["validation_requirements"]:
             print(f"  {row}")
+        print(f"Developer run: {payload['run_id']}")
+        return payload
+    if options.local_command in {"approve-patch", "reject-patch"}:
+        from src.developer.patch_authorization import record_patch_decision
+        choice = "approve" if options.local_command == "approve-patch" else "reject"
+        payload = record_patch_decision(
+            developer, options.repository, options.patch_run_id, choice,
+            approved_by=options.approved_by, note=options.note,
+        )
+        print("APPROVED FOR FUTURE PATCH APPLICATION — NOT APPLIED" if choice == "approve"
+              else "PATCH REJECTED — NO EXECUTION AUTHORITY")
+        print(f"Authorization ID: {payload['authorization_id']}")
+        print(f"Patch ID: {payload['source_patch_id']}")
+        print(f"Repository: {payload['repository_id']} at {payload['current_commit']}")
+        print("Target paths: " + (", ".join(payload["target_paths"]) or "none"))
+        print(f"Allowed operation: {payload['allowed_operation']}")
+        print(f"Developer audit label: {payload['approved_by']} (not identity verification)")
+        if payload["note"]:
+            print(f"Review note: {payload['note']}")
+        print("Executed: no; source changed: no; target tests run: no")
         print(f"Developer run: {payload['run_id']}")
         return payload
     if options.local_command == "inspect":
