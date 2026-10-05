@@ -261,6 +261,15 @@ def _build_parser() -> argparse.ArgumentParser:
     test_applied.add_argument("--test", action="append", default=[], help="Exact known unittest identity; may be repeated.")
     test_applied.add_argument("--json", action="store_true", help="Print the structured test observation as JSON.")
 
+    verify_execution = local_commands.add_parser(
+        "verify-execution", help="Verify one exact Phase 69/70 evidence chain and record human-review evidence."
+    )
+    verify_execution.add_argument("repository", type=_path_argument, help="Repository bound to the Phase 69 execution.")
+    verify_execution.add_argument("--execution-run-id", required=True, help="Exact Phase 69 application run ID.")
+    verify_execution.add_argument("--observation-run-id", required=True, help="Exact Phase 70 test observation run ID.")
+    verify_execution.add_argument("--workspace", type=_path_argument, help="External workspace containing the linked records.")
+    verify_execution.add_argument("--json", action="store_true", help="Print the stable verification summary as JSON.")
+
     query = local_commands.add_parser("query", help="Query an existing local developer index.")
     query.add_argument("question", help="Question text; stored only in the local developer run record.")
     query.add_argument("--repository", type=_path_argument, help="Select an indexed repository when multiple exist.")
@@ -1090,6 +1099,18 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
             print(f"Observation: {payload['observation_id']}; source execution: {payload['source_execution_id']}")
             print(f"External record: {payload['run_id']}; unexpected repository changes: "
                   f"{payload['unexpected_repository_changes']}")
+        return payload
+    if options.local_command == "verify-execution":
+        from src.developer.execution_verification import verify_execution
+        payload = verify_execution(developer, options.repository, options.execution_run_id,
+                                   options.observation_run_id)
+        if options.json:
+            print(json.dumps({"notice": _DEVELOPER_MODE_NOTICE, **payload}, indent=2, sort_keys=True))
+        else:
+            print(f"EXECUTION VERIFICATION: {payload['status'].upper()}")
+            print(f"Verification: {payload['verification_id']}; execution: {payload['execution_id']}")
+            print(f"Deviations: {len(payload['deviations'])}; unresolved uncertainty: {len(payload['unresolved_uncertainty'])}")
+            print(f"External evidence record: {payload['run_id']}; human review required: yes")
         return payload
     if options.local_command == "inspect":
         payload = developer.inspect(options.repository, options.changes)

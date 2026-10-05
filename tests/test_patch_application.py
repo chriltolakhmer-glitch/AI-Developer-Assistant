@@ -72,6 +72,10 @@ class PatchApplicationTests(unittest.TestCase):
         self.assertFalse(result["tests_executed"])
         self.assertFalse(result["git_commit_created"])
         self.assertFalse(result["git_staging_performed"])
+        self.assertTrue(result["semantic_index_unchanged"])
+        self.assertTrue(result["refs_unchanged"])
+        self.assertEqual(__import__("hashlib").sha256(_git_index_state(self.repo)).hexdigest(),
+                         result["semantic_index_sha256"])
         self.assertTrue((self.workspace.root / "runs" / result["run_id"] / "results.json").is_file())
         self.assertFalse((self.repo / "runs").exists())
 

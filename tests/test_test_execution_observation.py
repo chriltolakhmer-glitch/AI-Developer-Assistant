@@ -1,5 +1,7 @@
-"""Focused Phase 70 target unittest execution and observation invariants."""
+"""Focused Phase 70 execution and Phase 71 verification invariants."""
 from pathlib import Path
+import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +13,8 @@ from src.developer.patch_application import apply_approved_patch
 from src.developer.patch_authorization import record_patch_decision
 from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
 from src.developer.test_execution import execute_applied_patch_tests
+from src.developer.implementation_planning import ProposedAction
+from src.developer.execution_verification import verify_execution
 
 
 class TestExecutionObservationTests(unittest.TestCase):
@@ -35,15 +39,7 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.head = self.git("rev-parse", "HEAD")
         self.index = _git_index_state(self.repo)
         inventory = scan_local_repository(self.repo)
-        self.proposal = {
-            "action_id": "proposal-phase70-test", "status": "proposed", "execution_allowed": False,
-            "repository_path": str(self.repo.resolve()), "repository_id": inventory.repository_id,
-            "base_reference": "HEAD", "base_commit": inventory.commit_sha, "current_commit": inventory.commit_sha,
-            "working_tree_sha256": inventory.snapshot_id, "goal": "Change value function",
-            "target_paths": ["app.py"], "target_symbols": ["value"],
-            "evidence_refs": [{"file_path": "app.py", "symbol": "value", "evidence_types": ["changed_code"]}],
-            "unresolved_evidence": [],
-        }
+        self.plan_run_id = self._record_phase65_plan(inventory)
         self.patch_text = "--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def value():\n-    return 0\n+    return 2\n"
         draft = draft_patch(self.workspace, self.repo, self.proposal,
                             SuppliedPatchGenerator(self.patch_text))
@@ -57,7 +53,7 @@ class TestExecutionObservationTests(unittest.TestCase):
     def _write_tests(self, mode):
         rows = ["import unittest", "import app", "from pathlib import Path", "",
                 "class AppTests(unittest.TestCase):"]
-        if mode in {"pass", "fail", "skip"}:
+        if mode in {"pass", "fail", "skip", "git-refresh"}:
             rows += ["    def test_value(self):", "        self.assertEqual(2, app.value())"]
         if mode == "fail":
             rows = ["import unittest", "import app", "", "class AppTests(unittest.TestCase):",
@@ -75,7 +71,29 @@ class TestExecutionObservationTests(unittest.TestCase):
                      "        subprocess.run(['git', 'status', '--porcelain'], check=True, capture_output=True)"]
         (self.repo / "tests" / "test_app.py").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
-    def _reapply_with_test_mode(self, mode):
+    def _record_phase65_plan(self, inventory, *, uncertain=False):
+        targets = [{"file_path": "app.py", "qualified_symbol": "value", "role": "primary_target",
+                    "evidence_types": ["changed_code"], "reasons": ["fixture evidence"],
+                    "current_index_evidence": False}]
+        repository = {"repository_path": str(self.repo.resolve()), "repository_id": inventory.repository_id,
+                      "base_reference": "HEAD", "base_commit": inventory.commit_sha,
+                      "current_commit": inventory.commit_sha, "working_tree_sha256": inventory.snapshot_id}
+        impact = {"repository": repository, "index_freshness": {"working_tree_sha256": inventory.snapshot_id},
+                  "retrieval": {"query_evidence": []}}
+        exact_test = "tests.test_app.AppTests.test_value"
+        proposal = ProposedAction.from_plan(impact, targets, "Change value function", [])
+        tests = {"selected_tests": [exact_test], "selectors": ["tests.test_app"], "uncertain": uncertain,
+                 "exhaustive_required": False}
+        payload = {"mode": "developer-local-implementation-plan", "status": "completed",
+                   "goal": "Change value function", "repository": repository,
+                   "change_impact": {**impact, "tests": tests}, "proposed_action": proposal.to_dict(),
+                   "implementation_targets": targets, "tests": tests, "unresolved_evidence": [],
+                   "tests_executed": False, "source_changes_made": False}
+        payload["run_id"] = self.workspace._record_run("plan-change", inventory, payload)
+        self.proposal = proposal.to_dict()
+        return payload["run_id"]
+
+    def _reapply_with_test_mode(self, mode, *, uncertain=False):
         # Rebuild the disposable repository state before creating a fresh Phase 69 chain.
         self.git("checkout", "--", "app.py")
         self._write_tests(mode)
@@ -85,9 +103,7 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.index = _git_index_state(self.repo)
         self.workspace = DeveloperWorkspace(self.workspace.root.parent / f"workspace-{mode}")
         inventory = scan_local_repository(self.repo)
-        self.proposal = {**self.proposal, "repository_id": inventory.repository_id,
-                         "repository_path": str(self.repo.resolve()), "base_commit": inventory.commit_sha,
-                         "current_commit": inventory.commit_sha, "working_tree_sha256": inventory.snapshot_id}
+        self.plan_run_id = self._record_phase65_plan(inventory, uncertain=uncertain)
         draft = draft_patch(self.workspace, self.repo, self.proposal,
                             SuppliedPatchGenerator(self.patch_text))
         approval = record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")
@@ -110,6 +126,101 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.assertEqual(self.index, _git_index_state(self.repo))
         self.assertEqual("M app.py", self.git("status", "--short"))
         self.assertIn(b"return 2", (self.repo / "app.py").read_bytes())
+
+    def test_phase71_verifies_complete_chain_without_mutation_or_lifecycle_transition(self):
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        head, index, target = self.git("rev-parse", "HEAD"), _git_index_state(self.repo), (self.repo / "app.py").read_bytes()
+        result = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertEqual("verified", result["status"], result["deviations"])
+        self.assertEqual(self.plan_run_id, result["plan_run_id"])
+        self.assertEqual(["tests.test_app.AppTests.test_value"], result["expected_test_identities"])
+        self.assertEqual(result["expected_test_identities"], result["executed_test_identities"])
+        self.assertFalse(result["lifecycle_transition_performed"])
+        self.assertFalse(result["source_mutation_performed"])
+        self.assertFalse(result["git_staging_performed"])
+        self.assertFalse(result["git_commit_created"])
+        self.assertFalse(result["phase72_started"])
+        self.assertEqual(head, self.git("rev-parse", "HEAD"))
+        self.assertEqual(index, _git_index_state(self.repo))
+        self.assertEqual(target, (self.repo / "app.py").read_bytes())
+
+    def test_phase71_blocks_failed_tests_and_phase70_side_effects(self):
+        self._reapply_with_test_mode("fail")
+        failed = self.run_tests("tests.test_app.AppTests.test_value")
+        verified = verify_execution(self.workspace, self.repo, self.applied["run_id"], failed["run_id"])
+        self.assertNotEqual("verified", verified["status"])
+        self.assertIn("phase70_tests_did_not_pass", verified["deviations"])
+        self._reapply_with_test_mode("side-effect")
+        side_effect = self.run_tests("tests.test_app.AppTests.test_side_effect")
+        verified = verify_execution(self.workspace, self.repo, self.applied["run_id"], side_effect["run_id"])
+        self.assertNotEqual("verified", verified["status"])
+        self.assertIn("phase70_observation_reports_unexpected_repository_changes", verified["deviations"])
+
+    def test_phase71_records_exact_test_mismatch_and_stale_repository(self):
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        payload_path = self.workspace.root / "runs" / observation["run_id"] / "results.json"
+        payload = json.loads(payload_path.read_bytes())
+        payload["plan"]["test_identities"] = ["tests.test_app.AppTests.test_skipped"]
+        payload["test_identities"] = ["tests.test_app.AppTests.test_skipped"]
+        plan = payload["plan"]
+        plan_identity = {"schema_version": "1.0", "source_execution_id": plan["source_execution_id"],
+                         "repository_id": plan["repository_id"], "repository_state": plan["repository_state"],
+                         "target_paths": plan["target_paths"], "test_runner": plan["test_runner"],
+                         "test_identities": plan["test_identities"], "selection_source": plan["selection_source"]}
+        from src.developer.local_workflow import _json_bytes
+        plan["plan_id"] = "test-plan-" + hashlib.sha256(_json_bytes(plan_identity)).hexdigest()[:20]
+        payload["run_id"] = self.workspace._record_run("test-applied-patch", scan_local_repository(self.repo), payload)
+        mismatched = verify_execution(self.workspace, self.repo, self.applied["run_id"], payload["run_id"])
+        self.assertNotEqual("verified", mismatched["status"])
+        self.assertEqual(["tests.test_app.AppTests.test_value"], mismatched["missing_test_identities"])
+        self.assertEqual(["tests.test_app.AppTests.test_skipped"], mismatched["unexpected_test_identities"])
+
+        current = execute_applied_patch_tests(self.workspace, self.repo, self.applied["run_id"],
+                                              tests=("tests.test_app.AppTests.test_value",))
+        (self.repo / "unplanned.txt").write_text("drift\n", encoding="utf-8")
+        stale = verify_execution(self.workspace, self.repo, self.applied["run_id"], current["run_id"])
+        self.assertNotEqual("verified", stale["status"])
+        self.assertIn("current_repository_is_stale_or_drifted_from_phase69_poststate", stale["deviations"])
+
+    def test_phase71_rejects_cross_repository_and_tampered_execution_records(self):
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        other = self.repo.parent / "other-repository"
+        other.mkdir()
+        subprocess.run(["git", "-C", str(other), "init", "--quiet"], check=True)
+        (other / "other.py").write_text("VALUE = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(other), "add", "other.py"], check=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "commit", "--quiet", "-m", "initial"], check=True)
+        cross_repository = verify_execution(self.workspace, other, self.applied["run_id"], observation["run_id"])
+        self.assertNotEqual("verified", cross_repository["status"])
+        self.assertTrue(cross_repository["deviations"])
+        path = self.workspace.root / "runs" / self.applied["run_id"] / "results.json"
+        original = path.read_bytes()
+        path.write_bytes(original.replace(b'"status": "applied"', b'"status": "failed "'))
+        with self.assertRaisesRegex(LocalWorkflowError, "tampered"):
+            verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        path.write_bytes(original)
+
+    def test_phase71_blocks_required_uncertainty_and_tampered_patch_evidence(self):
+        self._reapply_with_test_mode("git-refresh", uncertain=True)
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        uncertain = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertNotEqual("verified", uncertain["status"])
+        self.assertIn("phase65_affected_test_selection_is_uncertain", uncertain["unresolved_uncertainty"])
+
+        auth_entry = next(path for path in (self.workspace.root / "runs").iterdir()
+                          if json.loads((path / "results.json").read_text()).get("mode")
+                          == "developer-local-patch-authorization"
+                          and json.loads((path / "results.json").read_text()).get("authorization_id")
+                          == self.applied["authorization_id"])
+        auth = json.loads((auth_entry / "results.json").read_text())
+        patch_record = self.workspace.root / "runs" / auth["source_patch_run_id"] / "results.json"
+        original = patch_record.read_bytes()
+        patch_record.write_bytes(original.replace(b"return 2", b"return 9"))
+        tampered = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertNotEqual("verified", tampered["status"])
+        self.assertIn("phase67_patch_evidence_missing_or_invalid", tampered["deviations"])
+        patch_record.write_bytes(original)
 
     def test_failure_is_recorded_without_reverting_patch_or_committing(self):
         self._reapply_with_test_mode("fail")

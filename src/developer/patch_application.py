@@ -267,12 +267,16 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
         raise LocalWorkflowError(f"PATCH NOT APPLIED; changes restored and verified: {error}") from error
     after = scan_local_repository(root)
     actual_diff = _git(root, ["diff", "--no-ext-diff", "--binary", "--", *paths]).decode("utf-8", errors="replace")
+    semantic_index_sha256 = hashlib.sha256(_git_index_state(root)).hexdigest()
+    refs_sha256 = hashlib.sha256(_git(root, ["for-each-ref", "--format=%(refname) %(objectname)"])).hexdigest()
     result = PatchApplicationResult("execution-" + hashlib.sha256((record.authorization_id + draft.patch_id).encode()).hexdigest()[:20],
         "1.0", record.authorization_id, draft.source_action_id, draft.patch_id, record.repository_id,
         str(root), record.current_commit, after.commit_sha, record.working_tree_sha256, after.snapshot_id,
         paths, record.patch_sha256, "applied", tuple(sorted(expected_changed)),
         actual_diff, None, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     payload = {"mode": "developer-local-patch-application", **result.to_dict(), "expected_diff": draft.patch_text,
+               "semantic_index_sha256": semantic_index_sha256, "semantic_index_unchanged": index_after == index_before,
+               "refs_sha256": refs_sha256, "refs_unchanged": refs_after == refs_before,
                "tests_executed": False, "git_commit_created": False, "git_staging_performed": False}
     try:
         payload["run_id"] = workspace._record_run("apply-patch", after, payload)
