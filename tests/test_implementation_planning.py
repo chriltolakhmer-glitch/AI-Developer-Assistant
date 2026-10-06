@@ -142,6 +142,23 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertNotIn("omitted_context", {row["type"] for row in report["unresolved_evidence"]})
         self.assertEqual("completed", report["status"])
 
+    def test_omitted_test_module_and_class_are_warnings_when_all_catalogued_tests_are_bound(self):
+        self.index()
+        query = self.query_payload()
+        query["context"]["omitted_context"] = [
+            {"chunk_id": "omitted-test-class", "file_path": "tests/test_app.py",
+             "symbol_name": "AppTests", "reason": "relationship expansion limit"},
+            {"chunk_id": "omitted-test-module", "file_path": "tests/test_app.py",
+             "symbol_name": "tests.test_app", "reason": "relationship expansion limit"},
+        ]
+        report = self.plan(query=query)
+        warnings = [row for row in report["warnings"] if row["type"] == "retrieval_omission"]
+        self.assertEqual({"exact_expected_test_container_binding"},
+                         {row["basis"]["kind"] for row in warnings})
+        self.assertEqual(2, len(warnings))
+        self.assertEqual("completed", report["status"])
+        self.assertFalse(any(row["type"] == "omitted_context" for row in report["unresolved_evidence"]))
+
     def test_omitted_context_without_independent_target_or_test_evidence_blocks(self):
         self.index()
         query = self.query_payload()

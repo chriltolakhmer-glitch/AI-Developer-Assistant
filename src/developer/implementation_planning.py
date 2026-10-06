@@ -524,7 +524,7 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
-                expected_tests: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                expected_tests: dict[str, Any], repository: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
     for item in impact["unresolved_relationships"]:
         rows.append({"type": "ambiguous_or_unresolved_relationship", "evidence": item,
@@ -562,6 +562,8 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
     test_evidence = {row.get("test"): row for row in expected_tests.get("evidence", [])
                      if isinstance(row, dict)}
     selected_tests = set(expected_tests.get("selected_tests", []))
+    from src.developer_testing import catalog
+    known_test_identities = {identity for identities in catalog(repository).values() for identity in identities}
     for item in context.get("omitted_context", []):
         path = item.get("file_path")
         symbol = item.get("symbol_name")
@@ -583,10 +585,32 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
                            and target.get("qualified_symbol") == symbol), None)
         target_has_independent_evidence = bool(target_row and set(target_row.get("evidence_types", ()))
                                                & {"retrieval_evidence", "changed_code", "static_relationship"})
+        container_identity = None
+        if path and symbol:
+            module_identity = ".".join(PurePosixPath(path).with_suffix("").parts)
+            if module_identity.endswith(".__init__"):
+                module_identity = module_identity.removesuffix(".__init__")
+            container_identity = (symbol if symbol == module_identity or symbol.startswith(module_identity + ".")
+                                  else module_identity + "." + symbol)
+        contained_tests = sorted(identity for identity in known_test_identities
+                                 if container_identity and identity.startswith(container_identity + "."))
+        container_tests_independently_bound = bool(
+            contained_tests and set(contained_tests) <= selected_tests
+            and all((test_evidence.get(identity) or {}).get("source") in
+                    {"planned_target_static_import", "explicit_developer_selection"}
+                    and any(target.get("file_path") in test_evidence[identity].get("target_paths", [])
+                            and target.get("role") != "test_target" for target in targets)
+                    for identity in contained_tests)
+        )
         basis = ({"kind": "exact_expected_test_binding", "test_identity": test_identity,
                   "selection_source": test_row.get("source"),
                   "test_file_path": path, "target_paths": test_row.get("target_paths")}
                  if test_is_independently_bound else
+                 {"kind": "exact_expected_test_container_binding", "container_identity": container_identity,
+                  "test_identities": contained_tests,
+                  "target_paths": sorted({path for identity in contained_tests
+                                           for path in test_evidence[identity].get("target_paths", [])})}
+                 if container_tests_independently_bound else
                  {"kind": "independent_target_evidence", "file_path": path,
                   "qualified_symbol": symbol,
                   "evidence_types": sorted(set(target_row.get("evidence_types", ()))
@@ -656,7 +680,7 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
     targets = _implementation_targets(impact, goal)
     preserved = _preserved_behavior(impact, targets)
     expected = _bind_expected_tests(Path(repository), impact, targets, expected_tests)
-    unresolved, warnings = _unresolved(impact, targets, expected)
+    unresolved, warnings = _unresolved(impact, targets, expected, Path(repository))
     impact["tests"] = {**impact["tests"], "selected_tests": expected["selected_tests"],
                        "expected_test_selection": expected}
     if not impact["changes"]["files"]:
