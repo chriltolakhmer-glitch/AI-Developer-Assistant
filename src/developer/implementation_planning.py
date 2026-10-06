@@ -564,6 +564,29 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
     selected_tests = set(expected_tests.get("selected_tests", []))
     from src.developer_testing import catalog
     known_test_identities = {identity for identities in catalog(repository).values() for identity in identities}
+    included_context = context.get("included_context", [])
+    included_keys = {(row.get("file_path"), row.get("symbol_name")) for row in included_context}
+    retrieval_rows = impact["retrieval"].get("query_evidence", [])
+    independently_proven_edges: set[tuple[str, str, str, str]] = set()
+    for retrieval_row in retrieval_rows:
+        details = retrieval_row.get("developer_context", {})
+        source_path, source_symbol = retrieval_row.get("file_path"), retrieval_row.get("symbol")
+        if not source_path or not source_symbol:
+            continue
+        for edge in details.get("relationship_references", []):
+            target_path, target_symbol = edge.get("file_path"), edge.get("symbol")
+            if target_path and target_symbol:
+                independently_proven_edges.add((target_path, target_symbol, source_path, source_symbol))
+        for binding in details.get("import_bindings", []):
+            module = binding.get("module")
+            imported = binding.get("imported_name")
+            binding_name = binding.get("binding")
+            if not module or not imported or not binding_name:
+                continue
+            target_path = module.replace(".", "/") + ".py"
+            called = set(details.get("called_symbol_names", []))
+            if imported in called and binding_name in called:
+                independently_proven_edges.add((target_path, imported, source_path, source_symbol))
     for item in context.get("omitted_context", []):
         path = item.get("file_path")
         symbol = item.get("symbol_name")
@@ -585,6 +608,10 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
                            and target.get("qualified_symbol") == symbol), None)
         target_has_independent_evidence = bool(target_row and set(target_row.get("evidence_types", ()))
                                                & {"retrieval_evidence", "changed_code", "static_relationship"})
+        edge_sources = sorted({(source_path, source_symbol) for target_path, target_symbol, source_path, source_symbol
+                               in independently_proven_edges
+                               if target_path == path and target_symbol == symbol
+                               and (source_path, source_symbol) in included_keys})
         container_identity = None
         if path and symbol:
             module_identity = ".".join(PurePosixPath(path).with_suffix("").parts)
@@ -611,6 +638,11 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
                   "target_paths": sorted({path for identity in contained_tests
                                            for path in test_evidence[identity].get("target_paths", [])})}
                  if container_tests_independently_bound else
+                 {"kind": "selected_context_relationship", "target": {"file_path": path,
+                  "qualified_symbol": symbol}, "source_evidence": [
+                      {"file_path": source_path, "qualified_symbol": source_symbol}
+                      for source_path, source_symbol in edge_sources]}
+                 if edge_sources else
                  {"kind": "independent_target_evidence", "file_path": path,
                   "qualified_symbol": symbol,
                   "evidence_types": sorted(set(target_row.get("evidence_types", ()))

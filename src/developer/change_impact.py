@@ -222,7 +222,13 @@ def _retrieval_evidence(payload: dict[str, Any]) -> dict[str, Any]:
         direct.append({"file_path": row["file_path"], "symbol": row["qualified_name"],
                        "start_line": row["start_line"], "end_line": row["end_line"],
                        "evidence_type": "retrieved_query", "rank": row.get("rank"),
-                       "reason": row.get("ranking_reason", {})})
+                       "reason": row.get("ranking_reason", {}),
+                       "developer_context": {
+                           "module_name": row.get("developer_context", {}).get("module_name"),
+                           "import_bindings": row.get("developer_context", {}).get("import_bindings", []),
+                           "called_symbol_names": row.get("developer_context", {}).get("called_symbol_names", []),
+                           "relationship_references": row.get("relationship_references", []),
+                       }})
         for item in row.get("related_context", []):
             related.append({"file_path": item.get("file_path"), "symbol": item.get("symbol_name"),
                             "evidence_type": "additional_related_context",

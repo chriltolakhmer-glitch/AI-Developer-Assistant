@@ -82,7 +82,8 @@ class ImplementationPlanningTests(unittest.TestCase):
                 "chunk_id": "run-id", "related_context": [{"file_path": "src/helpers.py",
                 "symbol_name": "validate", "reason": "call relationship"}],
             }],
-            "context": {"relationship_diagnostics": [], "omitted_context": []},
+            "context": {"relationship_diagnostics": [], "omitted_context": [],
+                        "included_context": [{"file_path": "src/app.py", "symbol_name": "run"}]},
             "run_id": "query-run",
         }
 
@@ -171,6 +172,61 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertEqual("blocking", omission["classification"])
         self.assertIsNone(omission["basis"])
         self.assertEqual("limited", report["status"])
+
+    def test_omitted_dependency_is_warning_only_when_selected_chunk_proves_exact_edge(self):
+        self.index()
+        query = self.query_payload()
+        query["results"][0]["developer_context"] = {
+            "import_bindings": [{"module": "src.helpers", "imported_name": "validate",
+                                 "binding": "validate"}],
+            "called_symbol_names": ["validate"],
+            "relationship_references": [{"file_path": "src/helpers.py", "symbol": "validate",
+                                          "kind": "call_relationship"}],
+        }
+        query["results"][0]["relationship_references"] = query["results"][0]["developer_context"]["relationship_references"]
+        query["context"]["omitted_context"] = [{
+            "chunk_id": "omitted-helper", "file_path": "src/helpers.py",
+            "symbol_name": "validate", "reason": "relationship expansion limit",
+        }]
+        report = self.plan(query=query)
+        omission = next(row for row in report["warnings"] if row["type"] == "retrieval_omission")
+        self.assertEqual("non_blocking", omission["classification"])
+        self.assertEqual("selected_context_relationship", omission["basis"]["kind"])
+        self.assertEqual("src/helpers.py", omission["basis"]["target"]["file_path"])
+        self.assertFalse(any(row["type"] == "omitted_context" for row in report["unresolved_evidence"]))
+
+    def test_omitted_module_container_is_warning_only_when_exact_relationship_is_included(self):
+        self.index()
+        query = self.query_payload()
+        query["results"][0]["developer_context"] = {
+            "relationship_references": [{"file_path": "src/helpers.py", "symbol": "src.helpers",
+                                          "kind": "importer_relationship"}],
+        }
+        query["results"][0]["relationship_references"] = query["results"][0]["developer_context"]["relationship_references"]
+        query["context"]["omitted_context"] = [{
+            "chunk_id": "omitted-module", "file_path": "src/helpers.py",
+            "symbol_name": "src.helpers", "reason": "relationship expansion limit",
+        }]
+        report = self.plan(query=query)
+        omission = next(row for row in report["warnings"] if row["type"] == "retrieval_omission")
+        self.assertEqual("selected_context_relationship", omission["basis"]["kind"])
+
+    def test_omitted_import_without_exact_call_or_relationship_remains_blocking(self):
+        self.index()
+        query = self.query_payload()
+        query["results"][0]["developer_context"] = {
+            "import_bindings": [{"module": "src.helpers", "imported_name": "validate",
+                                 "binding": "validate"}],
+            "called_symbol_names": [],
+            "relationship_references": [],
+        }
+        query["context"]["omitted_context"] = [{
+            "chunk_id": "omitted-helper", "file_path": "src/helpers.py",
+            "symbol_name": "validate", "reason": "relationship expansion limit",
+        }]
+        report = self.plan(query=query)
+        omission = next(row for row in report["unresolved_evidence"] if row["type"] == "omitted_context")
+        self.assertEqual("blocking", omission["classification"])
 
     def test_validated_plan_accepts_canonical_proposal_and_rejects_tampering(self):
         from src.developer.proposal_evidence import validated_plan
