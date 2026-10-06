@@ -13,7 +13,7 @@ from src.cli import main
 from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError, scan_local_repository
 from src.developer.patch_authorization import (AuthorizationRecord, _read_patch_run,
                                                record_patch_decision, validate_exact_patch_authorization)
-from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+from src.developer.patch_drafting import SuppliedPatchGenerator, _draft_patch_candidate as draft_patch
 
 
 class PatchAuthorizationTests(unittest.TestCase):

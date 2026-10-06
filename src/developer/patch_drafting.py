@@ -191,8 +191,20 @@ def _proposal_dict(proposal: Any) -> dict[str, Any]:
 
 
 def draft_patch(workspace: DeveloperWorkspace, repository: Path, proposal: Any,
-                generator: PatchDraftGenerator) -> dict[str, Any]:
-    """Validate a candidate against exact Phase 66 scope/state and externally record it."""
+                generator: PatchDraftGenerator, *, plan_run_id: str) -> dict[str, Any]:
+    """Accept a candidate only after validating its exact Phase 65/66 source run."""
+    from .proposal_evidence import validated_plan
+    proposed = _proposal_dict(proposal)
+    _, validated = validated_plan(workspace, repository, plan_run_id)
+    if validated.to_dict() != proposed:
+        raise LocalWorkflowError("Phase 66 proposal differs from validated Phase 65 evidence.")
+    return _draft_patch_candidate(workspace, repository, proposed, generator,
+                                  plan_run_id=plan_run_id)
+
+
+def _draft_patch_candidate(workspace: DeveloperWorkspace, repository: Path, proposal: Any,
+                           generator: PatchDraftGenerator, *, plan_run_id: str | None = None) -> dict[str, Any]:
+    """Low-level structural adapter for isolated Phase 67 contract fixtures."""
     proposed = _proposal_dict(proposal)
     inventory = scan_local_repository(repository)
     root = str(inventory.root.resolve())
@@ -251,7 +263,8 @@ def draft_patch(workspace: DeveloperWorkspace, repository: Path, proposal: Any,
     fields["patch_id"] = _patch_id_payload({**fields, "patch_id": ""})
     draft = PatchDraft(**fields)
     payload = {"mode": "developer-local-patch-draft", **draft.to_dict(),
-               "generator": "supplied_candidate_no_production_model",
-               "candidate_paths": list(paths), "tests_executed": False}
+                "generator": "supplied_candidate_no_production_model",
+                "candidate_paths": list(paths), "source_plan_run_id": plan_run_id,
+                "tests_executed": False}
     payload["run_id"] = workspace._record_run("draft-patch", inventory, payload)
     return payload

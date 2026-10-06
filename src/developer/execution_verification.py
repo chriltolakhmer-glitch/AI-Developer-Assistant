@@ -17,6 +17,7 @@ from .test_execution import _read_execution, _validate_phase69
 
 _RECORD_COMMAND = "verify-execution"
 _EXPECTED_RUNS = {
+    "impact": ("change-impact", "developer-local-change-impact"),
     "plan": ("plan-change", "developer-local-implementation-plan"),
     "proposal": ("plan-change", "developer-local-implementation-plan"),
     "patch": ("draft-patch", "developer-local-patch-draft"),
@@ -113,8 +114,15 @@ def _proposal(value: dict[str, Any]) -> ProposedAction:
 
 
 def _patch_hunk_lines(value: str) -> tuple[str, ...]:
-    return tuple(line for line in value.splitlines()
-                 if line.startswith(("@@", " ", "+", "-", "\\")))
+    rows = []
+    for line in value.splitlines():
+        if not line.startswith(("@@", " ", "+", "-", "\\")):
+            continue
+        if line.startswith("@@"):
+            match = re.match(r"^(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@)", line)
+            line = match.group(1) if match else line
+        rows.append(line)
+    return tuple(rows)
 
 
 def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_run_id: str,
@@ -189,25 +197,30 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         if (draft.status != "draft" or patch_hash != execution.get("patch_sha256")
                 or patch_hash != (authorization.patch_sha256 if authorization else None)
                 or draft.patch_id != execution.get("source_patch_id")
-                or draft.target_paths != tuple(execution.get("target_paths", ()) )):
+                 or not set(execution.get("target_paths", ())) <= set(draft.target_paths)):
             deviations.append("phase67_patch_identity_hash_or_scope_mismatch")
 
     # Follow the Phase 67 source action to its exact Phase 65 plan run.
-    plan_matches = []
-    for entry in (workspace.root / "runs").iterdir():
-        try:
-            candidate = json.loads((entry / "results.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        action = candidate.get("proposed_action", {})
-        if candidate.get("mode") == "developer-local-implementation-plan" and action.get("action_id") == execution.get("source_action_id"):
-            plan_matches.append(entry.name)
+    bound_plan_run_id = patch_payload.get("source_plan_run_id") if draft is not None else None
+    plan_matches = [bound_plan_run_id] if bound_plan_run_id else []
+    if not bound_plan_run_id:
+        for entry in (workspace.root / "runs").iterdir():
+            try:
+                candidate = json.loads((entry / "results.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            action = candidate.get("proposed_action", {})
+            if candidate.get("mode") == "developer-local-implementation-plan" and action.get("action_id") == execution.get("source_action_id"):
+                plan_matches.append(entry.name)
     if len(plan_matches) != 1:
         deviations.append("phase65_plan_missing_or_ambiguous")
         plan_meta, plan = {}, {}
         proposal = None
     else:
         plan_meta, plan = load("plan", plan_matches[0])
+        if draft is not None and patch_payload.get("source_plan_run_id") is not None \
+                and patch_payload.get("source_plan_run_id") != plan_matches[0]:
+            deviations.append("phase67_draft_source_plan_run_id_mismatch")
         if (str(Path(plan_meta.get("repository_path", "")).resolve()) != str(root)
                 or plan.get("repository", {}).get("repository_id") != execution.get("repository_id")):
             deviations.append("phase65_plan_run_metadata_repository_mismatch")
@@ -247,7 +260,19 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         if expected_proposal.to_dict() != proposal.to_dict():
             deviations.append("phase66_proposal_does_not_match_phase65_plan_content")
         tests = plan.get("tests", {})
+        if tests.get("expected_test_selection") is not None \
+                and tests != plan.get("change_impact", {}).get("tests"):
+            deviations.append("phase65_expected_tests_differ_from_plan_impact")
         expected_tests = tuple(sorted(set(tests.get("selected_tests", ()))))
+        bound_selection = tests.get("expected_test_selection")
+        if bound_selection is not None:
+            evidence = bound_selection.get("evidence", ())
+            if (bound_selection.get("status") != "known"
+                    or bound_selection.get("selected_tests") != list(expected_tests)
+                    or sorted(row.get("test") for row in evidence if isinstance(row, dict)) != list(expected_tests)
+                    or any(not isinstance(row, dict) or not row.get("source") or not row.get("target_paths")
+                           for row in evidence)):
+                uncertainty.append("phase65_expected_test_selection_unknown_or_unevidenced")
         if not expected_tests and tests.get("selectors"):
             deviations.append("phase65_plan_did_not_record_exact_expected_test_identities")
         elif expected_tests:
@@ -346,8 +371,8 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
     changed_paths = tuple(sorted(line[3:].split(" -> ")[-1] for line in current_status.splitlines() if len(line) >= 4))
     approved_paths = tuple(sorted(authorization.target_paths if authorization else ()))
     actual_paths = tuple(sorted(execution.get("files_changed", ())))
-    if actual_paths != approved_paths:
-        deviations.append("phase69_actual_changed_paths_differ_from_approved_paths")
+    if not set(actual_paths) <= set(approved_paths):
+        deviations.append("phase69_actual_changed_paths_exceed_approved_paths")
     if not set(actual_paths) <= set(proposal.target_paths if proposal is not None else ()):
         deviations.append("phase69_actual_changed_paths_exceed_phase66_proposed_scope")
     if actual_diff != execution.get("diff_after"):
@@ -357,8 +382,8 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         if actual_hunks != approved_hunks:
             deviations.append("phase69_actual_diff_hunks_differ_from_approved_patch")
         section_paths = {new for _, new in re.findall(r"(?m)^diff --git a/(.*?) b/(.*?)$", actual_diff)}
-        if section_paths != set(approved_paths):
-            deviations.append("phase69_recorded_diff_paths_differ_from_approved_scope")
+        if section_paths != set(actual_paths):
+            deviations.append("phase69_recorded_diff_paths_differ_from_actual_scope")
     expected_state = execution.get("working_tree_after")
     current_state_matches = inventory.snapshot_id == expected_state
     repository_comparison = {

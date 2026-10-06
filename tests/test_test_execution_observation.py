@@ -11,7 +11,7 @@ from src.developer.local_workflow import (DeveloperWorkspace, LocalWorkflowError
                                           _git_index_state, scan_local_repository)
 from src.developer.patch_application import apply_approved_patch
 from src.developer.patch_authorization import record_patch_decision
-from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+from src.developer.patch_drafting import SuppliedPatchGenerator, _draft_patch_candidate as draft_patch
 from src.developer.test_execution import execute_applied_patch_tests
 from src.developer.implementation_planning import ProposedAction
 from src.developer.execution_verification import verify_execution

@@ -1,5 +1,11 @@
 # Phase 65 — Evidence-Grounded Implementation Planning
 
+## Post-roadmap pilot-readiness integration
+
+For a clean Git checkout, the plan now binds existing exact `unittest` method identities from static import paths between planned Python targets and the test catalog. `tests.expected_test_selection` records the identities, source paths, selection source, confidence, and uncertainty. A developer can instead bind one or more existing exact methods with repeatable `--expected-test tests.module.Class.test_method` arguments. Unknown methods are rejected. If no relevant exact tests can be identified, the plan records `expected_tests_unknown`, requires a human test decision, and cannot become an approvable patch draft. Static import evidence does not establish runtime coverage. The selected identities are preserved for Phase 70 and compared again in Phase 71.
+
+The developer index and pinned real model are required for current goal-retrieval evidence. A narrow `--top-k` can reduce duplicate retrieved context in a small project, but omitted required context remains visible and blocks patch drafting; it is not silently discarded.
+
 ## Outcome
 
 Phase 65 adds a developer-only, read-only command that converts existing repository evidence into a deterministic implementation plan:

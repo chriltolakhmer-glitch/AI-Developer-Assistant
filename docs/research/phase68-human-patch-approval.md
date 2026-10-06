@@ -1,5 +1,9 @@
 # Phase 68 — Human Patch Approval
 
+## Post-roadmap pilot-readiness integration
+
+An approval retains the draft's allowed target paths and binds the exact supplied patch hash and repository state. The patch may modify a strict subset of the allowed paths. Approval never authorizes a path outside that maximum scope or a different diff, and it does not authorize test execution.
+
 ## Purpose
 
 Phase 68 records a solo developer's explicit decision about one Phase 67

@@ -1,5 +1,11 @@
 # Phase 67 - Evidence-Grounded Patch Drafting
 
+## Post-roadmap pilot-readiness integration
+
+The `draft-patch` CLI validates the canonical Phase 65 plan run and its linked Phase 64 change-impact run before it accepts the embedded Phase 66 proposal. It checks workspace/repository/state binding, content-derived run IDs, recomputed proposal identity, targets, symbols, evidence references, unresolved uncertainty, and expected-test selection. Missing, modified, cross-workspace, or stale evidence fails before a candidate is retained. The accepted draft records its exact source plan run ID for later test execution and verification.
+
+`target_paths` in the proposal and draft are the allowed maximum scope. `candidate_paths` is calculated from the supplied diff and may be a strict subset. Any path outside the allowed scope remains invalid. The full proposal evidence and uncertainty are retained.
+
 ## Purpose
 
 Phase 67 adds an externally recorded, reviewable unified-diff artifact linked to a Phase 66 `ProposedAction`. A candidate is accepted only for the proposal's exact repository and working-tree state.

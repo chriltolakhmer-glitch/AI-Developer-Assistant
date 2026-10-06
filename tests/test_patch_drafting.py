@@ -10,7 +10,9 @@ import unittest
 
 from src.cli import main
 from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError, scan_local_repository
-from src.developer.patch_drafting import PatchDraft, SuppliedPatchGenerator, draft_patch, validate_unified_diff
+from src.developer.patch_drafting import (PatchDraft, SuppliedPatchGenerator,
+    _draft_patch_candidate as draft_patch, draft_patch as validated_draft_patch,
+    validate_unified_diff)
 
 
 class PatchDraftingTests(unittest.TestCase):
@@ -73,6 +75,16 @@ class PatchDraftingTests(unittest.TestCase):
         self.assertEqual("developer-local-patch-draft", first["mode"])
         self.assertFalse(first["tests_executed"])
 
+    def test_public_drafting_requires_a_validated_source_plan(self):
+        before = self.file.read_bytes()
+        with self.assertRaises(TypeError):
+            validated_draft_patch(self.workspace, self.repo, self.proposal,
+                                  SuppliedPatchGenerator(self.patch))
+        with self.assertRaises(LocalWorkflowError):
+            validated_draft_patch(self.workspace, self.repo, self.proposal,
+                                  SuppliedPatchGenerator(self.patch), plan_run_id="0" * 20)
+        self.assertEqual(before, self.file.read_bytes())
+
     def test_changed_patch_has_changed_identity(self):
         one = draft_patch(self.workspace, self.repo, self.proposal, SuppliedPatchGenerator(self.patch))
         changed = self.patch.replace("return 2", "return 3")
@@ -132,7 +144,7 @@ class PatchDraftingTests(unittest.TestCase):
         with self.assertRaisesRegex(LocalWorkflowError, "Unsupported or unsafe"):
             draft_patch(self.workspace, self.repo, unsupported, SuppliedPatchGenerator(self.patch))
 
-    def test_cli_json_and_human_output_keep_review_boundary_and_external_storage(self):
+    def test_cli_rejects_uncanonical_upstream_record_without_mutation(self):
         with self.assertRaises(LocalWorkflowError):
             self.workspace._contained(self.workspace.root / "runs" / ".." / ".." / "outside.json")
         runs = self.workspace.root / "runs" / "proposal-run"
@@ -143,18 +155,10 @@ class PatchDraftingTests(unittest.TestCase):
         before = self.file.read_bytes()
         args = ["local", "draft-patch", str(self.repo), "--proposal-run-id", "proposal-run",
                 "--patch-file", str(external_patch), "--workspace", str(self.workspace.root)]
-        output = StringIO()
-        with redirect_stdout(output), redirect_stderr(StringIO()):
-            self.assertEqual(0, main([*args, "--json"]))
-        payload = json.loads(output.getvalue())
-        self.assertEqual("developer-local-patch-draft", payload["mode"])
-        self.assertEqual("draft", payload["status"])
-        self.assertFalse(payload["apply_allowed"])
-        self.assertTrue(payload["human_review_required"])
-        output = StringIO()
-        with redirect_stdout(output), redirect_stderr(StringIO()):
-            self.assertEqual(0, main(args))
-        self.assertIn("PATCH DRAFT — NOT APPLIED — HUMAN REVIEW REQUIRED", output.getvalue())
+        error = StringIO()
+        with redirect_stdout(StringIO()), redirect_stderr(error):
+            self.assertNotEqual(0, main([*args, "--json"]))
+        self.assertIn("Invalid Phase 71 plan run ID", error.getvalue())
         self.assertEqual(before, self.file.read_bytes())
         self.assertNotIn("candidate.diff", {p.name for p in self.repo.rglob("*")})
 

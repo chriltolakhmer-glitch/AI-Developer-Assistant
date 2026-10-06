@@ -227,6 +227,8 @@ def _build_parser() -> argparse.ArgumentParser:
     plan_change.add_argument("--workspace", type=_path_argument, help="Developer workspace override.")
     plan_change.add_argument("--base", help="Include committed changes after this commit plus current worktree changes.")
     plan_change.add_argument("--goal", required=True, help="Developer goal used as the retrieval question.")
+    plan_change.add_argument("--expected-test", action="append", default=[],
+                             help="Existing exact unittest method identity to bind before approval; may be repeated.")
     plan_change.add_argument("--top-k", type=int, default=10, help="Maximum retrieval results (1-50; default: 10).")
     plan_change.add_argument("--json", action="store_true", help="Print the stable implementation-plan payload as JSON.")
 
@@ -982,7 +984,7 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         from src.developer.implementation_planning import plan_change
         payload = plan_change(
             developer, options.repository, goal=options.goal,
-            base=options.base, top_k=options.top_k,
+            base=options.base, top_k=options.top_k, expected_tests=tuple(options.expected_test),
         )
         freshness = payload["change_impact"]["index_freshness"]["status"]
         print(f"Goal: {payload['goal']}")
@@ -1037,16 +1039,14 @@ def _run_local_text_command(options: argparse.Namespace, config: PrototypeConfig
         return payload
     if options.local_command == "draft-patch":
         from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
-        proposal_run = developer._contained(workspace / "runs" / options.proposal_run_id / "results.json")
-        if not proposal_run.is_file():
-            raise LocalWorkflowError(f"Phase 66 proposal run was not found in this developer workspace: {options.proposal_run_id}")
-        proposal_payload = json.loads(proposal_run.read_text(encoding="utf-8"))
+        from src.developer.proposal_evidence import validated_plan
+        _, proposal = validated_plan(developer, options.repository, options.proposal_run_id)
         patch_path = options.patch_file.resolve()
         if patch_path.is_relative_to(Path(options.repository).resolve()):
             raise LocalWorkflowError("Candidate patch file must be outside the target repository.")
         patch_text = patch_path.read_text(encoding="utf-8")
-        payload = draft_patch(developer, options.repository, proposal_payload.get("proposed_action"),
-                              SuppliedPatchGenerator(patch_text))
+        payload = draft_patch(developer, options.repository, proposal,
+                              SuppliedPatchGenerator(patch_text), plan_run_id=options.proposal_run_id)
         print("PATCH DRAFT — NOT APPLIED — HUMAN REVIEW REQUIRED")
         print(f"Patch ID: {payload['patch_id']}")
         print(f"Proposal ID: {payload['source_action_id']}")

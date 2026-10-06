@@ -1,5 +1,9 @@
 # Phase 71 — Execution Verification and Lifecycle Evidence
 
+## Post-roadmap pilot-readiness integration
+
+For a linked draft, Phase 71 loads its exact source plan run rather than searching by a proposal ID that can be shared by repeated plans with different expected tests. It checks the planned exact identities and their evidence against the Phase 70 executed set, and reports unknown or unevidenced selection as uncertainty. Proposal and approval paths are allowed scope; the approved diff and Phase 69 recorded paths define actual scope. Verification requires actual paths to remain within approval and match the observed patch, including Git diffs whose hunk headers add a function-context label.
+
 ## Purpose
 
 Phase 70 records bounded test execution facts. Phase 71 verifies that one exact Phase 65–70 evidence chain matches its approved intent and records a compact external evidence summary for human lifecycle review. Verification does not decide whether an action should be closed, approved, rejected, repaired, retried, rolled back, or advanced.

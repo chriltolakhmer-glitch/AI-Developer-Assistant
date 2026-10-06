@@ -1,6 +1,7 @@
 """Focused Phase 65 evidence-grounded implementation-planning coverage."""
 
 from contextlib import redirect_stderr, redirect_stdout
+import difflib
 from io import StringIO
 import json
 from pathlib import Path
@@ -114,6 +115,135 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertFalse(report["tests_executed"])
         self.assertFalse(report["source_changes_made"])
         self.assertEqual(before, self.source_snapshot())
+
+    def test_clean_start_binds_existing_exact_tests_from_planned_imports(self):
+        self.index()
+        report = self.plan()
+        selected = report["tests"]["expected_test_selection"]
+        self.assertEqual("known", selected["status"])
+        self.assertEqual(["tests.test_app.AppTests.test_run"], selected["selected_tests"])
+        self.assertEqual(selected["selected_tests"], report["tests"]["selected_tests"])
+        self.assertEqual("planned_target_static_import", selected["evidence"][0]["source"])
+        self.assertIn("src/app.py", selected["evidence"][0]["target_paths"])
+
+    def test_validated_plan_accepts_canonical_proposal_and_rejects_tampering(self):
+        from src.developer.proposal_evidence import validated_plan
+        from src.developer.local_workflow import _json_bytes
+        self.index()
+        report = self.plan()
+        _, proposal = validated_plan(self.developer, self.repository, report["run_id"])
+        self.assertEqual(report["proposed_action"], proposal.to_dict())
+        result_path = self.workspace_path / "runs" / report["run_id"] / "results.json"
+        original = result_path.read_bytes()
+        for alteration in (lambda row: row.update(goal="Forged goal"),
+                           lambda row: row["proposed_action"].update(action_id="proposal-forged"),
+                           lambda row: row["proposed_action"].update(evidence_refs=[]),
+                           lambda row: row["tests"].update(selected_tests=[])):
+            changed = json.loads(original)
+            alteration(changed)
+            result_path.write_bytes(_json_bytes(changed))
+            with self.assertRaisesRegex(LocalWorkflowError, "missing, malformed, or tampered"):
+                validated_plan(self.developer, self.repository, report["run_id"])
+            result_path.write_bytes(original)
+        with self.assertRaises(LocalWorkflowError):
+            validated_plan(DeveloperWorkspace(self.root / "wrong-workspace"), self.repository,
+                           report["run_id"])
+        other = self.root / "other-repository"
+        other.mkdir()
+        with self.assertRaisesRegex(LocalWorkflowError, "repository bindings differ"):
+            validated_plan(self.developer, other, report["run_id"])
+        impact_run = report["change_impact"]["run_id"]
+        impact_path = self.workspace_path / "runs" / impact_run / "results.json"
+        impact_bytes = impact_path.read_bytes()
+        impact_path.unlink()
+        with self.assertRaisesRegex(LocalWorkflowError, "missing, malformed, or tampered"):
+            validated_plan(self.developer, self.repository, report["run_id"])
+        impact_path.write_bytes(impact_bytes)
+        (self.repository / "src" / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+        with self.assertRaisesRegex(LocalWorkflowError, "stale"):
+            validated_plan(self.developer, self.repository, report["run_id"])
+
+    def test_cli_draft_accepts_only_validated_clean_start_plan(self):
+        self.index()
+        report = self.plan()
+        source = (self.repository / "src" / "app.py").read_text(encoding="utf-8")
+        candidate = source.replace("return validate(value) if TOKEN_MODE else value",
+                                   "return validate(value) if TOKEN_MODE else str(value)")
+        diff = "".join(difflib.unified_diff(source.splitlines(keepends=True),
+                                            candidate.splitlines(keepends=True),
+                                            fromfile="a/src/app.py", tofile="b/src/app.py"))
+        patch_path = self.root / "candidate.diff"
+        patch_path.write_text(diff, encoding="utf-8")
+        output, error = StringIO(), StringIO()
+        with redirect_stdout(output), redirect_stderr(error):
+            code = main(["local", "draft-patch", str(self.repository), "--proposal-run-id",
+                         report["run_id"], "--patch-file", str(patch_path), "--workspace",
+                         str(self.workspace_path), "--json"])
+        self.assertEqual(0, code, error.getvalue())
+        draft = json.loads(output.getvalue())
+        self.assertEqual("draft", draft["status"])
+        self.assertEqual(report["run_id"], draft["source_plan_run_id"])
+        self.assertEqual(["src/app.py"], draft["candidate_paths"])
+
+    def test_clean_start_expected_tests_continue_through_recovery_without_reselection(self):
+        from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+        from src.developer.patch_authorization import record_patch_decision
+        from src.developer.patch_application import apply_approved_patch
+        from src.developer.test_execution import execute_applied_patch_tests
+        from src.developer.execution_verification import verify_execution
+        from src.developer.recovery_evaluation import evaluate_recovery
+
+        (self.repository / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        with (self.repository / "tests" / "test_app.py").open("a", encoding="utf-8") as target:
+            target.write("\n    def test_other(self):\n        self.assertTrue(True)\n")
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "package tests")
+        self.index()
+        report = self.plan()
+        expected = report["tests"]["selected_tests"]
+        self.assertEqual(["tests.test_app.AppTests.test_other", "tests.test_app.AppTests.test_run"], expected)
+        source = (self.repository / "src" / "app.py").read_text(encoding="utf-8")
+        candidate = source.replace("return validate(value) if TOKEN_MODE else value",
+                                   "return validate(value) if TOKEN_MODE else str(value)")
+        diff = "".join(difflib.unified_diff(source.splitlines(keepends=True),
+                                            candidate.splitlines(keepends=True),
+                                            fromfile="a/src/app.py", tofile="b/src/app.py"))
+        draft = draft_patch(self.developer, self.repository, report["proposed_action"],
+                            SuppliedPatchGenerator(diff), plan_run_id=report["run_id"])
+        self.assertEqual("draft", draft["status"])
+        approval = record_patch_decision(self.developer, self.repository, draft["run_id"], "approve")
+        applied = apply_approved_patch(self.developer, self.repository, approval["run_id"])
+        with self.assertRaisesRegex(LocalWorkflowError, "differ from the approved Phase 65"):
+            execute_applied_patch_tests(self.developer, self.repository, applied["run_id"],
+                                        tests=(expected[0],))
+        observation = execute_applied_patch_tests(self.developer, self.repository, applied["run_id"])
+        self.assertEqual(expected, observation["test_identities"])
+        self.assertEqual("passed", observation["status"])
+        verified = verify_execution(self.developer, self.repository, applied["run_id"], observation["run_id"])
+        self.assertEqual("verified", verified["status"],
+                         (verified.get("deviations"), repr(diff), repr(applied.get("diff_after"))))
+        recovery = evaluate_recovery(self.developer, self.repository, verified["run_id"])
+        self.assertEqual("no_recovery_required", recovery["classification"])
+
+    def test_unknown_expected_tests_require_a_human_test_decision(self):
+        (self.repository / "tests" / "test_app.py").write_text(
+            "import unittest\nclass AppTests(unittest.TestCase):\n"
+            "    def test_run(self):\n        self.assertTrue(True)\n", encoding="utf-8")
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "unrelated test")
+        self.index()
+        report = self.plan()
+        self.assertEqual("unknown", report["tests"]["expected_test_selection"]["status"])
+        self.assertEqual([], report["tests"]["selected_tests"])
+        self.assertIn("expected_tests_unknown", {row["type"] for row in report["unresolved_evidence"]})
+
+    def test_explicit_expected_test_must_exist(self):
+        self.index()
+        with patch("src.developer.local_workflow.load_model", return_value=_Model()), \
+                patch.object(self.developer, "query", return_value=self.query_payload()), \
+                self.assertRaisesRegex(LocalWorkflowError, "exact existing unittest"):
+            plan_change(self.developer, self.repository, goal="Add validation to run",
+                        expected_tests=("tests.test_app.AppTests.test_missing",))
 
     def test_phase66_typing_creates_reviewable_proposal_contract(self):
         self.index()

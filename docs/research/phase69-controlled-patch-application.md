@@ -1,5 +1,9 @@
 # Phase 69 — Controlled Patch Application
 
+## Post-roadmap pilot-readiness integration
+
+The approved target list is the allowed maximum. Phase 69 derives actual patch paths from the exact approved diff, requires them to be a nonempty subset of that list, and records the paths actually changed. A strict subset is valid; a path outside approval is rejected. Observed post-application paths must equal the actual patch paths.
+
 ## Purpose
 
 Phase 69 applies one exact Phase 67 unified diff only when the matching Phase 68 authorization approves it.

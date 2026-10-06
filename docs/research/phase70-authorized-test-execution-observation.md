@@ -1,5 +1,9 @@
 # Phase 70 — Authorized Test Execution and Observation
 
+## Post-roadmap pilot-readiness integration
+
+For drafts linked to a validated Phase 65 plan, Phase 70 uses that plan's exact expected-test identities. Omitting `--test` runs the bound set; specifying `--test` is accepted only when the complete explicit set equals the bound set. Missing or changed identities stop before the worker starts. The approved allowed paths may exceed the patch paths, while Phase 69 observed paths must equal the actual patch paths. Older direct test fixtures without a linked plan retain their legacy selection behavior.
+
 ## Purpose
 
 Phase 70 executes a bounded Python `unittest` selection after one exact Phase 69 patch application and records what the process reported. It does not decide whether the change is correct. The AIDA development gate validates this feature; a target repository observation is separate evidence about the applied target source.

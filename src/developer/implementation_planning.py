@@ -13,6 +13,51 @@ from .change_impact import analyze_change_impact
 from .local_workflow import DeveloperWorkspace, LocalWorkflowError, scan_local_repository
 
 
+def _bind_expected_tests(repository: Path, impact: dict[str, Any],
+                         targets: list[dict[str, Any]], explicit: tuple[str, ...]) -> dict[str, Any]:
+    """Bind existing exact unittest identities to changed or planned Python targets."""
+    from src.developer_testing import catalog, _dependencies, _dependents
+
+    known = catalog(repository)
+    identities = {test for rows in known.values() for test in rows}
+    if explicit:
+        chosen = tuple(sorted(set(explicit)))
+        if any(test not in identities for test in chosen):
+            raise LocalWorkflowError("Expected tests must be exact existing unittest method identities.")
+        evidence = [{"test": test, "source": "explicit_developer_selection",
+                     "target_paths": sorted({row["file_path"] for row in targets if row.get("file_path")})}
+                    for test in chosen]
+        return {"status": "known", "selected_tests": list(chosen), "evidence": evidence,
+                "confidence": "developer_selected", "uncertainty": ["Runtime coverage requires human review."]}
+    if impact["changes"]["files"]:
+        chosen = tuple(sorted(set(impact["tests"]["selected_tests"])))
+        evidence = [{"test": test, "source": "changed_file_dependency_selection",
+                     "target_paths": sorted({row["path"] for row in impact["changes"]["files"]})}
+                    for test in chosen]
+        return {"status": "known" if chosen else "unknown", "selected_tests": list(chosen),
+                "evidence": evidence, "confidence": "static_import" if chosen else "unknown",
+                "uncertainty": list(impact["tests"].get("diagnostics", ())) if impact["tests"].get("uncertain") else []}
+    graph = _dependencies(repository)
+    reasons: dict[str, set[str]] = {}
+    for row in targets:
+        path = row.get("file_path")
+        if not isinstance(path, str) or not path.endswith(".py"):
+            continue
+        module = ".".join(Path(path).with_suffix("").parts)
+        if module.endswith(".__init__"):
+            module = module.removesuffix(".__init__")
+        for dependent in _dependents({module}, graph) | {module}:
+            for test in known.get(dependent, ()):
+                reasons.setdefault(test, set()).add(path)
+    chosen = tuple(sorted(reasons))
+    return {"status": "known" if chosen else "unknown", "selected_tests": list(chosen),
+            "evidence": [{"test": test, "source": "planned_target_static_import",
+                          "target_paths": sorted(reasons[test])} for test in chosen],
+            "confidence": "static_import" if chosen else "unknown",
+            "uncertainty": ["Static imports do not prove runtime coverage."] if chosen else
+            ["No existing exact unittest identity has a static import path from the planned targets."]}
+
+
 _ROLE_PRIORITY = {
     "manual_review": 0,
     "related_context": 1,
@@ -560,7 +605,8 @@ def _steps(targets: list[dict[str, Any]], preserved: list[dict[str, Any]],
 
 
 def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
-                base: str | None = None, top_k: int = 10) -> dict[str, Any]:
+                base: str | None = None, top_k: int = 10,
+                expected_tests: tuple[str, ...] = ()) -> dict[str, Any]:
     """Build and externally record a read-only plan from Phase 64 evidence."""
     if not isinstance(goal, str) or not goal.strip():
         raise LocalWorkflowError("goal must be nonempty text.")
@@ -568,13 +614,22 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
     impact = analyze_change_impact(workspace, repository, base=base, question=goal, top_k=top_k)
     targets = _implementation_targets(impact, goal)
     preserved = _preserved_behavior(impact, targets)
-    guidance = _test_guidance(goal, impact, targets)
     unresolved = _unresolved(impact, targets)
+    expected = _bind_expected_tests(Path(repository), impact, targets, expected_tests)
+    impact["tests"] = {**impact["tests"], "selected_tests": expected["selected_tests"],
+                       "expected_test_selection": expected}
+    if not impact["changes"]["files"]:
+        impact["tests"]["selectors"] = sorted({".".join(test.split(".")[:2])
+                                                  for test in expected["selected_tests"]})
+    guidance = _test_guidance(goal, impact, targets)
+    if expected["status"] == "unknown":
+        unresolved.append({"type": "expected_tests_unknown", "evidence": expected["uncertainty"],
+                           "action": "Choose existing exact regression tests and replan with --expected-test."})
 
     non_test_targets = [row for row in targets if row["role"] != "test_target"]
     freshness = impact["index_freshness"]["status"]
     unsupported = impact["changes"]["unsupported_changed_files"]
-    if not non_test_targets or (freshness == "unsupported" and unsupported):
+    if not non_test_targets or expected["status"] == "unknown" or (freshness == "unsupported" and unsupported):
         status = "manual_review_required"
     elif freshness != "current" or impact["unresolved_relationships"]:
         status = "limited"
@@ -597,6 +652,7 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
             "run_id": impact["run_id"], "changes": impact["changes"], "symbols": impact["symbols"],
             "relationships": impact["relationships"], "unresolved_relationships": impact["unresolved_relationships"],
             "index_freshness": impact["index_freshness"], "retrieval": impact["retrieval"],
+            "tests": impact["tests"],
             "recommended_actions": impact["recommended_actions"],
         },
         "proposed_action": proposal.to_dict(),

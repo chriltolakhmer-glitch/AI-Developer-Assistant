@@ -181,7 +181,7 @@ def _validate_phase69(workspace: DeveloperWorkspace, repository: Path, run_id: s
             or auth_payload.get("current_commit") != head
             or auth_payload.get("working_tree_sha256") != result.get("working_tree_before")
             or auth_payload.get("patch_sha256") != patch_hash
-            or set(auth_payload.get("target_paths", ())) != expected_paths):
+            or not expected_paths <= set(auth_payload.get("target_paths", ()))):
         raise LocalWorkflowError("Repository no longer matches the Phase 69 post-state; TEST NOT EXECUTED.")
     _check_phase69_draft_and_auth(workspace, authorization, expected_paths, root, result, inventory)
     return result, authorization, inventory
@@ -194,7 +194,7 @@ def _check_phase69_draft_and_auth(workspace: DeveloperWorkspace, authorization, 
     draft.validate()
     authorization.validate()
     if (draft.patch_id != result["source_patch_id"] or draft.source_action_id != result["source_action_id"]
-            or draft.repository_id != result["repository_id"] or set(draft.target_paths) != paths
+             or draft.repository_id != result["repository_id"] or not paths <= set(draft.target_paths)
             or draft.patch_text != result.get("expected_diff") or draft.repository_path != str(root)
             or draft.current_commit != result.get("repository_before")
             or draft.working_tree_sha256 != result.get("working_tree_before")
@@ -205,14 +205,21 @@ def _check_phase69_draft_and_auth(workspace: DeveloperWorkspace, authorization, 
             or authorization.current_commit != result.get("repository_before")
             or authorization.working_tree_sha256 != result.get("working_tree_before")
             or authorization.patch_sha256 != result.get("patch_sha256")
-            or set(authorization.target_paths) != paths):
+             or not paths <= set(authorization.target_paths)):
         raise LocalWorkflowError("Phase 69 PatchDraft binding is invalid; TEST NOT EXECUTED.")
 
 
 def _make_plan(result: dict[str, Any], inventory, repository: Path,
-               explicit_tests: tuple[str, ...]) -> TestExecutionPlan:
+               explicit_tests: tuple[str, ...], bound_tests: tuple[str, ...] | None = None) -> TestExecutionPlan:
     identities = {name for module_tests in catalog(repository).values() for name in module_tests}
-    if explicit_tests:
+    if bound_tests is not None:
+        if explicit_tests and tuple(sorted(set(explicit_tests))) != bound_tests:
+            raise LocalWorkflowError("Explicit tests differ from the approved Phase 65 expected tests; TEST NOT EXECUTED.")
+        if not bound_tests or any(name not in identities for name in bound_tests):
+            raise LocalWorkflowError("Approved expected tests are missing from the current catalog; TEST NOT EXECUTED.")
+        selection = plan_tests(root=repository, tests=bound_tests)
+        source = "phase65_approved_expected_test_identities"
+    elif explicit_tests:
         unique = tuple(sorted(set(explicit_tests)))
         if any(not _TEST_ID.fullmatch(name) or name not in identities for name in unique):
             raise LocalWorkflowError("Explicit selector must be an exact known unittest method identity.")
@@ -252,7 +259,20 @@ def execute_applied_patch_tests(workspace: DeveloperWorkspace, repository: Path,
     root = Path(repository).expanduser().resolve(strict=True)
     workspace._prepare(root)
     result, authorization, before_inventory = _validate_phase69(workspace, root, execution_run_id)
-    plan = _make_plan(result, before_inventory, root, tests)
+    from .proposal_evidence import validated_plan
+    patch_run = workspace._contained(workspace.root / "runs" / authorization.source_patch_run_id / "results.json")
+    try:
+        patch_payload = json.loads(patch_run.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise LocalWorkflowError("Phase 67 evidence is unavailable; TEST NOT EXECUTED.") from error
+    plan_run_id = patch_payload.get("source_plan_run_id")
+    bound_tests = None
+    if plan_run_id is not None:
+        prior, proposal = validated_plan(workspace, root, plan_run_id, require_current=False)
+        if proposal.action_id != result["source_action_id"]:
+            raise LocalWorkflowError("Approved Phase 65 proposal differs from Phase 69; TEST NOT EXECUTED.")
+        bound_tests = tuple(prior["tests"]["expected_test_selection"]["selected_tests"])
+    plan = _make_plan(result, before_inventory, root, tests, bound_tests)
     before = _state_snapshot(root, before_inventory)
     # Final source binding immediately before starting the fixed unittest worker.
     latest = scan_local_repository(root)

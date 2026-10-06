@@ -8,7 +8,7 @@ from unittest.mock import patch as mock_patch
 from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError, _git_index_state, scan_local_repository
 from src.developer.patch_application import _apply_text, apply_approved_patch
 from src.developer.patch_authorization import record_patch_decision
-from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+from src.developer.patch_drafting import SuppliedPatchGenerator, _draft_patch_candidate as draft_patch
 
 
 class PatchApplicationTests(unittest.TestCase):
@@ -78,6 +78,15 @@ class PatchApplicationTests(unittest.TestCase):
                          result["semantic_index_sha256"])
         self.assertTrue((self.workspace.root / "runs" / result["run_id"] / "results.json").is_file())
         self.assertFalse((self.repo / "runs").exists())
+
+    def test_approved_allowed_scope_accepts_a_smaller_exact_patch(self):
+        only_a = "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n def run():\n-    return 1\n+    return 2\n"
+        draft, decision = self.make_authorization(only_a)
+        self.assertEqual(["a.py", "b.py"], decision["target_paths"])
+        self.assertEqual(["a.py"], draft["candidate_paths"])
+        result = self.execute(decision)
+        self.assertEqual(["a.py"], result["files_changed"])
+        self.assertEqual(b"VALUE = 1\n", self.b.read_bytes())
 
     def test_index_refresh_metadata_does_not_change_semantic_entries(self):
         before = _git_index_state(self.repo)
