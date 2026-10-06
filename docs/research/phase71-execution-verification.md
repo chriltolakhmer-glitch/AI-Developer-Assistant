@@ -68,3 +68,7 @@ The bounded disposable pilot is recorded outside the checkout at `C:\Apps\phase7
 ## Limitations and deferred work
 
 Verification establishes consistency of the recorded chain and current repository facts; it does not prove untested behavior or replace human code review. Generic static-analysis uncertainty remains visible in warnings. Phase 72 follow-up/recovery evaluation, any repair/retry/rollback decision, and every lifecycle closure remain deferred to a separate explicitly reviewed phase.
+
+## Symbol-scope verification
+
+Phase 71 checks Phase 65 allowed path-qualified symbols against Phase 67/68 candidate symbols and Phase 69 actual/observed symbols. Verification requires actual scope to remain within allowed scope and exact agreement between the approved candidate and applied patch. Symbol attribution is static source evidence; it does not prove runtime behavior. Phase 72 continues to consume the Phase 71 result without symbol repair or automatic action.

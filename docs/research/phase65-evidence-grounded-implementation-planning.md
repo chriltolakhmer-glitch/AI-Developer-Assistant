@@ -62,3 +62,7 @@ The real-project pilot uses the bounded goal “Improve the error message when c
 The immutable `v0.1.1` research release baseline is unchanged. Research retrieval/evaluation, benchmark artifacts, Humanize, `VERSION`, and `release-manifest.json` remain outside Phase 65. The pending `phase61-dependency-context-v5` review is not approved, rejected, activated, deployed, or otherwise changed by planning evidence.
 
 Phase 65 does not modify code. A later phase may investigate controlled patch drafting only after this implementation-planning workflow is validated.
+
+## Symbol-scope contract
+
+Phase 65 target evidence binds allowed symbols as canonical path-qualified `(file_path, qualified_symbol)` pairs. Flat `target_symbols` remain descriptive only. The reserved `<module>` sentinel represents module-level changes and cannot collide with a Python identifier; it is authorized only by an explicit Phase 65 evidence reference.

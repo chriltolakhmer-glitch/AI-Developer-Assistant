@@ -35,7 +35,8 @@ class PatchApplicationTests(unittest.TestCase):
             "base_reference": "HEAD", "base_commit": inv.commit_sha, "current_commit": inv.commit_sha,
             "working_tree_sha256": inv.snapshot_id, "goal": "Change exact values",
             "target_paths": ["a.py", "b.py"], "target_symbols": ["run"],
-            "evidence_refs": [{"file_path": "a.py", "symbol": "run", "evidence_types": ["changed_code"]}],
+            "evidence_refs": [{"file_path": "a.py", "symbol": "run", "evidence_types": ["changed_code"]},
+                              {"file_path": "b.py", "symbol": "<module>", "evidence_types": ["module_scope_test_fixture"]}],
             "unresolved_evidence": [],
         }
         self.patch_text = (
@@ -67,6 +68,9 @@ class PatchApplicationTests(unittest.TestCase):
         self.assertEqual(b"def run():\n    return 2\n", self.a.read_bytes())
         self.assertEqual(b"VALUE = 2\n", self.b.read_bytes())
         self.assertEqual(["a.py", "b.py"], result["files_changed"])
+        self.assertEqual(result["actual_patch_symbol_scope"], result["observed_applied_symbol_scope"])
+        self.assertIn({"file_path": "a.py", "qualified_symbol": "run"}, result["actual_patch_symbol_scope"])
+        self.assertIn({"file_path": "b.py", "qualified_symbol": "<module>"}, result["actual_patch_symbol_scope"])
         self.assertEqual(head, self.git("rev-parse", "HEAD"))
         self.assertEqual(index, _git_index_state(self.repo))
         self.assertFalse(result["tests_executed"])

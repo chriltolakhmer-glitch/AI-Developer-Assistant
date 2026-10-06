@@ -77,3 +77,9 @@ No production patch-generation model is configured. Candidate text must be suppl
 ## Deferred work
 
 Human authorization (Phase 68), controlled patch application (Phase 69), target test execution, observations, rollback, repair loops, deployment, and lifecycle closure remain deferred.
+
+## Candidate symbol scope
+
+Phase 67 independently applies the unified diff to the exact source pre-image, then attributes changed old lines against the parsed pre-image and changed new lines against the parsed post-image. It records allowed and candidate scope separately as sorted path-qualified pairs. The smallest enclosing parsed class/function/method is used; module statements map to `<module>`. An exact symbol match is allowed, and a class may authorize a member only when the parser proves that membership. A strict candidate subset is valid. An unlisted sibling or module edit, invalid Python image, malformed hunk, or unresolved attribution blocks drafting before approval. File-level permission never implies permission for every symbol in that file.
+
+The immutable PatchDraft distinguishes `target_paths` (allowed file scope) from `candidate_paths` (actual diff paths), just as it distinguishes allowed symbol scope from candidate symbol scope. Candidate paths must be the exact canonical paths parsed from the diff and a subset of allowed paths.

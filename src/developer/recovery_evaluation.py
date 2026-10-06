@@ -95,6 +95,16 @@ def _require_verification(workspace: DeveloperWorkspace, root: Path, run_id: str
                     "executed_test_identities", "unexpected_changes"):
             if not isinstance(value[key], list) or len(value[key]) != len(set(value[key])):
                 raise ValueError(key)
+        symbol_scopes = {}
+        for key in ("expected_symbol_scope", "approved_symbol_scope", "actual_symbol_scope"):
+            rows = value[key]
+            if (not isinstance(rows, list) or any(not isinstance(row, dict)
+                    or set(row) != {"file_path", "qualified_symbol"} for row in rows)):
+                raise ValueError(key)
+            pairs = [(row["file_path"], row["qualified_symbol"]) for row in rows]
+            if pairs != sorted(set(pairs)):
+                raise ValueError(key)
+            symbol_scopes[key] = [list(pair) for pair in pairs]
         comparison, outcome = value["repository_state_comparison"], value["test_outcome"]
         if (not isinstance(comparison, dict) or not isinstance(outcome, dict)
                 or comparison.get("current_working_tree") != meta.get("working_tree_sha256")
@@ -107,6 +117,9 @@ def _require_verification(workspace: DeveloperWorkspace, root: Path, run_id: str
                     "uncertainty": sorted(value["unresolved_uncertainty"]),
                     "warnings": sorted(value["warnings"]),
                     "actual_paths": value["actual_changed_paths"],
+                    "expected_symbols": symbol_scopes["expected_symbol_scope"],
+                    "approved_symbols": symbol_scopes["approved_symbol_scope"],
+                    "actual_symbols": symbol_scopes["actual_symbol_scope"],
                     "selected_tests": value["executed_test_identities"],
                     "repository_state": comparison, "test_outcome": outcome}
         expected = "verification-" + hashlib.sha256(_json_bytes(identity)).hexdigest()[:20]

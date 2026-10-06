@@ -34,6 +34,9 @@ class AuthorizationRecord:
     working_tree_sha256: str
     patch_sha256: str
     target_paths: tuple[str, ...]
+    candidate_paths: tuple[str, ...]
+    allowed_symbol_scope: tuple[tuple[str, str], ...]
+    candidate_symbol_scope: tuple[tuple[str, str], ...]
     decision: str
     decided_at: str
     approved_by: str
@@ -62,6 +65,9 @@ class AuthorizationRecord:
         for path in self.target_paths:
             if _diff_path(path) != path:
                 raise ValueError("Authorization target paths must be repository-relative.")
+        for scope in (self.allowed_symbol_scope, self.candidate_symbol_scope):
+            if tuple(sorted(set(scope))) != scope:
+                raise ValueError("Authorization symbol scope must be canonical.")
         if not self.decided_at or not self.approved_by.strip() or len(self.approved_by) > 100:
             raise ValueError("Authorization requires a decision time and short audit label.")
         if self.note is not None and (not isinstance(self.note, str) or len(self.note) > 500):
@@ -79,15 +85,21 @@ class AuthorizationRecord:
             raise ValueError("Authorization ID does not match the decision record.")
 
     def to_dict(self) -> dict[str, Any]:
-        return {field.name: list(self.target_paths) if field.name == "target_paths"
-                else getattr(self, field.name) for field in fields(self)}
+        return {field.name: (list(getattr(self, field.name)) if field.name in {"target_paths", "candidate_paths"} else
+                [{"file_path": p, "qualified_symbol": s} for p, s in getattr(self, field.name)]
+                if field.name in {"allowed_symbol_scope", "candidate_symbol_scope"} else getattr(self, field.name))
+                for field in fields(self)}
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AuthorizationRecord:
         expected = {field.name for field in fields(cls)}
         if not isinstance(value, dict) or set(value) != expected:
             raise ValueError("Authorization record fields are missing or unexpected.")
-        return cls(**{**value, "target_paths": tuple(value["target_paths"])})
+        converted = dict(value, target_paths=tuple(value["target_paths"]),
+                         candidate_paths=tuple(value["candidate_paths"]))
+        for name in ("allowed_symbol_scope", "candidate_symbol_scope"):
+            converted[name] = tuple((row["file_path"], row["qualified_symbol"]) for row in value[name])
+        return cls(**converted)
 
 
 def _read_patch_run(workspace: DeveloperWorkspace, patch_run_id: str) -> PatchDraft:
@@ -116,9 +128,11 @@ def _read_patch_run(workspace: DeveloperWorkspace, patch_run_id: str) -> PatchDr
         raise LocalWorkflowError("Phase 67 patch run content was modified; redraft the patch.")
     try:
         content = {field.name: payload[field.name] for field in fields(PatchDraft)}
-        for name in ("target_paths", "target_symbols", "evidence_refs", "unresolved_evidence",
+        for name in ("target_paths", "candidate_paths", "target_symbols", "evidence_refs", "unresolved_evidence",
                      "validation_requirements"):
             content[name] = tuple(content[name])
+        for name in ("allowed_symbol_scope", "candidate_symbol_scope"):
+            content[name] = tuple((row["file_path"], row["qualified_symbol"]) for row in payload[name])
         draft = PatchDraft(**content)
         if (any(payload[field.name] != draft.to_dict()[field.name] for field in fields(PatchDraft))
                 or metadata.get("repository_id") != draft.repository_id
@@ -155,10 +169,11 @@ def validate_exact_patch_authorization(record: AuthorizationRecord, draft: Patch
     expected = (draft.source_action_id, draft.patch_id, draft.repository_id,
                 str(Path(draft.repository_path).resolve()), draft.current_commit,
                 draft.working_tree_sha256, hashlib.sha256(draft.patch_text.encode("utf-8")).hexdigest(),
-                draft.target_paths)
+                draft.target_paths, draft.candidate_paths, draft.allowed_symbol_scope, draft.candidate_symbol_scope)
     actual = (record.source_action_id, record.source_patch_id, record.repository_id,
               str(Path(record.repository_path).resolve()), record.current_commit,
-              record.working_tree_sha256, record.patch_sha256, record.target_paths)
+              record.working_tree_sha256, record.patch_sha256, record.target_paths,
+              record.candidate_paths, record.allowed_symbol_scope, record.candidate_symbol_scope)
     if actual != expected:
         raise LocalWorkflowError("Authorization does not match the exact PatchDraft; approve the new draft.")
     _check_repository(draft, scan_local_repository(repository), require_state=True)
@@ -186,13 +201,21 @@ def record_patch_decision(workspace: DeveloperWorkspace, repository: Path, patch
         repository_id=draft.repository_id, repository_path=draft.repository_path,
         current_commit=draft.current_commit, working_tree_sha256=draft.working_tree_sha256,
         patch_sha256=hashlib.sha256(draft.patch_text.encode("utf-8")).hexdigest(),
-        target_paths=draft.target_paths, decision=decision,
+        target_paths=draft.target_paths, candidate_paths=draft.candidate_paths,
+        allowed_symbol_scope=draft.allowed_symbol_scope,
+        candidate_symbol_scope=draft.candidate_symbol_scope, decision=decision,
         decided_at=datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
         approved_by=approved_by.strip(), execution_authorized=decision == "approve",
         allowed_operation="apply_exact_patch" if decision == "approve" else "none",
         executed=False, note=note,
     )
-    data["authorization_id"] = _authorization_id({**data, "target_paths": list(draft.target_paths)})
+    identity_data = {**data, "target_paths": list(draft.target_paths),
+                     "candidate_paths": list(draft.candidate_paths),
+                     "allowed_symbol_scope": [{"file_path": p, "qualified_symbol": s}
+                                              for p, s in draft.allowed_symbol_scope],
+                     "candidate_symbol_scope": [{"file_path": p, "qualified_symbol": s}
+                                                for p, s in draft.candidate_symbol_scope]}
+    data["authorization_id"] = _authorization_id(identity_data)
     record = AuthorizationRecord(**data)
     if decision == "approve":
         validate_exact_patch_authorization(record, draft, inventory.root)

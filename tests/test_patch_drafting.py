@@ -23,7 +23,7 @@ class PatchDraftingTests(unittest.TestCase):
         self.repo = root / "repo"
         self.repo.mkdir()
         self.file = self.repo / "app.py"
-        self.file.write_text("def run():\n    return 1\n", encoding="utf-8")
+        self.file.write_text("def run():\n    return 1\n\ndef reset_state():\n    return 0\n", encoding="utf-8")
         self.git("init", "--quiet")
         self.git("config", "user.name", "Phase 67")
         self.git("config", "user.email", "phase67@example.invalid")
@@ -74,6 +74,29 @@ class PatchDraftingTests(unittest.TestCase):
         self.assertEqual(config, (self.repo / ".git" / "config").read_bytes())
         self.assertEqual("developer-local-patch-draft", first["mode"])
         self.assertFalse(first["tests_executed"])
+        self.assertEqual([{"file_path": "app.py", "qualified_symbol": "run"}], first["candidate_symbol_scope"])
+        self.assertEqual(first["candidate_symbol_scope"], first["allowed_symbol_scope"])
+
+    def test_sibling_symbol_expansion_is_blocked_before_draft_record(self):
+        expanded = self.patch + "@@ -4,2 +4,2 @@\n def reset_state():\n-    return 0\n+    return 1\n"
+        before_runs = set(path.name for path in (self.workspace.root / "runs").iterdir()) if (self.workspace.root / "runs").exists() else set()
+        before_file = self.file.read_bytes()
+        with self.assertRaisesRegex(LocalWorkflowError, "symbol scope"):
+            draft_patch(self.workspace, self.repo, self.proposal, SuppliedPatchGenerator(expanded))
+        after_runs = set(path.name for path in (self.workspace.root / "runs").iterdir()) if (self.workspace.root / "runs").exists() else set()
+        self.assertEqual(before_runs, after_runs)
+        self.assertEqual(before_file, self.file.read_bytes())
+
+    def test_module_scope_requires_explicit_path_qualified_authorization(self):
+        module_patch = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-import os\n+import sys\n"
+        self.file.write_text("import os\n\ndef run():\n    return 1\n\ndef reset_state():\n    return 0\n", encoding="utf-8")
+        self.git("add", "--all"); self.git("commit", "--quiet", "-m", "module fixture")
+        self.inventory = scan_local_repository(self.repo)
+        proposal = dict(self.proposal, current_commit=self.inventory.commit_sha,
+                        base_commit=self.inventory.commit_sha,
+                        working_tree_sha256=self.inventory.snapshot_id)
+        with self.assertRaisesRegex(LocalWorkflowError, "symbol scope"):
+            draft_patch(self.workspace, self.repo, proposal, SuppliedPatchGenerator(module_patch))
 
     def test_public_drafting_requires_a_validated_source_plan(self):
         before = self.file.read_bytes()
@@ -165,6 +188,9 @@ class PatchDraftingTests(unittest.TestCase):
     def test_typed_contract_rejects_authority_or_identity_changes(self):
         result = draft_patch(self.workspace, self.repo, self.proposal, SuppliedPatchGenerator(self.patch))
         fields = {key: result[key] for key in PatchDraft.__dataclass_fields__}
+        fields["candidate_paths"] = tuple(fields["candidate_paths"])
+        for scope_name in ("allowed_symbol_scope", "candidate_symbol_scope"):
+            fields[scope_name] = tuple((row["file_path"], row["qualified_symbol"]) for row in fields[scope_name])
         fields["execution_allowed"] = True
         with self.assertRaisesRegex(ValueError, "cannot execute"):
             PatchDraft(**fields)

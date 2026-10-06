@@ -95,3 +95,7 @@ The executor supports the existing Phase 67 Python target boundary. Git diff tex
 ## Deferred work
 
 Authorized target test execution and observations, user-facing rollback, automatic commit, deployment, and lifecycle verification/closure belong to later phases.
+
+## Symbol-scope enforcement
+
+Before the first write, Phase 69 recomputes candidate symbols from the exact approved patch and repository pre-image, checks candidate scope against approved allowed scope, and requires equality with the Phase 67 and Phase 68 candidate records. After writing exact post-images, it independently attributes the observed diff and records both actual patch and observed applied symbol scope. Any mismatch blocks application and uses the existing bounded restoration behavior.

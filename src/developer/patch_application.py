@@ -16,6 +16,7 @@ from .local_workflow import (DeveloperWorkspace, LocalWorkflowError, _digest, _g
                              _json_bytes, scan_local_repository)
 from .patch_authorization import AuthorizationRecord, _read_patch_run, validate_exact_patch_authorization
 from .patch_drafting import PatchDraft, validate_unified_diff
+from .symbol_scope import derive_patch_symbols, patch_sections, postimages_for_patch, scope_is_allowed
 
 
 def _status(root: Path) -> bytes:
@@ -49,10 +50,14 @@ class PatchApplicationResult:
     diff_after: str
     error: str | None
     applied_at: str
+    actual_patch_symbol_scope: tuple[tuple[str, str], ...] = ()
+    observed_applied_symbol_scope: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {f.name: list(getattr(self, f.name)) if f.name in {"target_paths", "files_changed"}
-                else getattr(self, f.name) for f in fields(self)}
+        return {f.name: (list(getattr(self, f.name)) if f.name in {"target_paths", "files_changed"} else
+                [{"file_path": p, "qualified_symbol": s} for p, s in getattr(self, f.name)]
+                if f.name in {"actual_patch_symbol_scope", "observed_applied_symbol_scope"} else getattr(self, f.name))
+                for f in fields(self)}
 
 
 def _load_authorization(workspace: DeveloperWorkspace, run_id: str) -> AuthorizationRecord:
@@ -161,7 +166,16 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
     if draft.status != "draft" or hashlib.sha256(draft.patch_text.encode()).hexdigest() != record.patch_sha256:
         raise LocalWorkflowError("Patch identity or status mismatch; PATCH NOT APPLIED.")
     paths = validate_unified_diff(draft.patch_text, draft.target_paths)
+    if paths != record.candidate_paths:
+        raise LocalWorkflowError("Candidate file scope differs from Phase 68 approval; PATCH NOT APPLIED.")
     root = Path(record.repository_path).resolve(strict=True)
+    preimages, postimages = postimages_for_patch(root, draft.patch_text, paths, _apply_text)
+    recomputed_symbols = derive_patch_symbols(draft.patch_text, preimages, postimages)
+    if (recomputed_symbols != draft.candidate_symbol_scope
+            or recomputed_symbols != record.candidate_symbol_scope
+            or draft.allowed_symbol_scope != record.allowed_symbol_scope
+            or not scope_is_allowed(recomputed_symbols, record.allowed_symbol_scope, preimages)):
+        raise LocalWorkflowError("Patch symbol scope differs from exact Phase 68 approval; PATCH NOT APPLIED.")
     staged: dict[str, tuple[Path, bytes, bytes]] = {}
     # Capture repository-level Git state before computing any post-images.
     head_before = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip()
@@ -170,17 +184,7 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
     refs_before = _git(root, ["for-each-ref", "--format=%(refname) %(objectname)"]).decode()
     if status_before.strip():
         raise LocalWorkflowError("Repository has Git changes outside the approved state; PATCH NOT APPLIED.")
-    sections = re.split(r"(?m)(?=^--- )", draft.patch_text)
-    section_by_path: dict[str, str] = {}
-    for section in sections:
-        if not section.strip():
-            continue
-        headers = section.splitlines()[:2]
-        if len(headers) < 2:
-            raise LocalWorkflowError("Malformed patch file section; PATCH NOT APPLIED.")
-        from .patch_drafting import _diff_path
-        section_path = _diff_path(headers[0][4:])
-        section_by_path[section_path] = section
+    section_by_path = patch_sections(draft.patch_text)
     for relative in paths:
         target = root.joinpath(*relative.split("/"))
         if target.is_symlink():
@@ -243,6 +247,11 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
                 changed_paths.add(line[3:].split(" -> ")[-1])
         if changed_paths != expected_changed:
             raise LocalWorkflowError("Actual changed paths differ from the approved target paths.")
+        observed_postimages = {path: staged[path][0].read_text(encoding="utf-8") for path in paths}
+        observed_diff = _git(root, ["diff", "--no-ext-diff", "--binary", "--", *paths]).decode("utf-8", errors="replace")
+        observed_symbols = derive_patch_symbols(observed_diff, preimages, observed_postimages)
+        if observed_symbols != recomputed_symbols:
+            raise LocalWorkflowError("Observed applied symbols differ from the exact patch; PATCH NOT APPLIED.")
         if head_after != head_before or index_after != index_before or refs_after != refs_before:
             raise LocalWorkflowError(f"Git state changed: HEAD={head_after != head_before}, index={index_after != index_before}, refs={refs_after != refs_before}; before={refs_before!r}, after={refs_after!r}.")
     except Exception as error:
@@ -273,7 +282,8 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
         "1.0", record.authorization_id, draft.source_action_id, draft.patch_id, record.repository_id,
         str(root), record.current_commit, after.commit_sha, record.working_tree_sha256, after.snapshot_id,
         paths, record.patch_sha256, "applied", tuple(sorted(expected_changed)),
-        actual_diff, None, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+        actual_diff, None, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        recomputed_symbols, observed_symbols)
     payload = {"mode": "developer-local-patch-application", **result.to_dict(), "expected_diff": draft.patch_text,
                "semantic_index_sha256": semantic_index_sha256, "semantic_index_unchanged": index_after == index_before,
                "refs_sha256": refs_sha256, "refs_unchanged": refs_after == refs_before,

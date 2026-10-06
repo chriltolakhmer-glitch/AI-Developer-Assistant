@@ -105,3 +105,9 @@ Phase 68 does not establish that the patch applies or passes target tests.
 
 Phase 69 will handle controlled patch application. Target tests, observations,
 rollback, repair, deployment, and lifecycle closure remain deferred.
+
+## Symbol scope binding
+
+Approval binds the allowed path-qualified symbol pairs and the exact candidate symbol pairs alongside the patch hash, repository state, and allowed file paths. Approval remains limited to `apply_exact_patch`; a sibling symbol in the same approved file is outside the authorization.
+
+Phase68 stores `target_paths` as the allowed file scope and `candidate_paths` as the exact diff file set. The patch hash binds the exact diff; both path sets and both symbol scopes are recorded in the authorization identity.

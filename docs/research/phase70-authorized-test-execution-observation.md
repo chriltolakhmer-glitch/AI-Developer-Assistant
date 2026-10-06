@@ -79,3 +79,7 @@ Only Python `unittest` is supported. The worker uses the local Python interprete
 ## Deferred work
 
 Phase 70 does not interpret correctness, issue a verification verdict, approve or close a lifecycle, plan repairs, decide rollback, commit, or deploy. A passing test observation is not yet Phase 71 verification.
+
+## Source symbol evidence
+
+Phase 70 carries the Phase 69 actual and observed symbol records through its validated execution binding. No runtime symbol instrumentation is added: these records describe static source-patch scope only.

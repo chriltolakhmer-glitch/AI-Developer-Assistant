@@ -17,7 +17,7 @@ from typing import Any
 from src.developer_testing import catalog, plan as plan_tests
 from .local_workflow import (DeveloperWorkspace, LocalWorkflowError, _digest, _git, _git_index_state,
                              _json_bytes, scan_local_repository)
-from .patch_application import _load_authorization
+from .patch_application import _apply_text, _load_authorization
 
 _WORKER = Path(__file__).with_name("test_runner_worker.py").resolve(strict=True)
 _TEST_ID = re.compile(r"^tests(?:\.[A-Za-z_]\w*){2,}$")
@@ -181,9 +181,36 @@ def _validate_phase69(workspace: DeveloperWorkspace, repository: Path, run_id: s
             or auth_payload.get("current_commit") != head
             or auth_payload.get("working_tree_sha256") != result.get("working_tree_before")
             or auth_payload.get("patch_sha256") != patch_hash
-            or not expected_paths <= set(auth_payload.get("target_paths", ()))):
+            or not expected_paths <= set(auth_payload.get("target_paths", ()))
+            or tuple(result.get("target_paths", ())) != authorization.candidate_paths):
         raise LocalWorkflowError("Repository no longer matches the Phase 69 post-state; TEST NOT EXECUTED.")
     _check_phase69_draft_and_auth(workspace, authorization, expected_paths, root, result, inventory)
+    from .patch_authorization import _read_patch_run
+    from .symbol_scope import derive_patch_symbols, postimages_from_preimages, scope_is_allowed
+    draft = _read_patch_run(workspace, authorization.source_patch_run_id)
+    preimages = {}
+    for relative in expected_paths:
+        try:
+            preimages[relative] = subprocess.run(
+                ["git", "-C", str(root), "show", f"HEAD:{relative}"],
+                check=True, capture_output=True).stdout.decode("utf-8")
+        except (subprocess.CalledProcessError, UnicodeError) as error:
+            raise LocalWorkflowError("Cannot revalidate Phase 69 symbol pre-image; TEST NOT EXECUTED.") from error
+    exact_postimages = postimages_from_preimages(result.get("expected_diff", ""),
+                                                  tuple(sorted(expected_paths)), preimages, _apply_text)
+    actual_symbols = derive_patch_symbols(result.get("expected_diff", ""), preimages, exact_postimages)
+    observed_postimages = {path: (root / path).read_text(encoding="utf-8") for path in expected_paths}
+    observed_symbols = derive_patch_symbols(phase69_diff, preimages, observed_postimages)
+    if (actual_symbols != draft.candidate_symbol_scope
+            or actual_symbols != authorization.candidate_symbol_scope
+            or draft.allowed_symbol_scope != authorization.allowed_symbol_scope
+            or result.get("actual_patch_symbol_scope") != [
+                {"file_path": p, "qualified_symbol": s} for p, s in actual_symbols]
+            or result.get("observed_applied_symbol_scope") != [
+                {"file_path": p, "qualified_symbol": s} for p, s in observed_symbols]
+            or actual_symbols != observed_symbols
+            or not scope_is_allowed(actual_symbols, authorization.allowed_symbol_scope, preimages)):
+        raise LocalWorkflowError("Phase 69 symbol scope failed independent approval/post-state verification; TEST NOT EXECUTED.")
     return result, authorization, inventory
 
 

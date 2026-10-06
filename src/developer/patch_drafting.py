@@ -11,6 +11,7 @@ import subprocess
 from typing import Any, Protocol
 
 from .local_workflow import DeveloperWorkspace, LocalWorkflowError, scan_local_repository
+from .symbol_scope import derive_patch_symbols, postimages_for_patch, proposal_allowed_scope, scope_is_allowed
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,12 +27,15 @@ class PatchDraft:
     working_tree_sha256: str | None
     goal: str
     target_paths: tuple[str, ...]
+    candidate_paths: tuple[str, ...]
     target_symbols: tuple[str, ...]
     patch_format: str
     patch_text: str
     evidence_refs: tuple[dict[str, Any], ...]
     unresolved_evidence: tuple[dict[str, Any], ...]
     validation_requirements: tuple[str, ...]
+    allowed_symbol_scope: tuple[tuple[str, str], ...] = ()
+    candidate_symbol_scope: tuple[tuple[str, str], ...] = ()
     status: str = "draft"
     human_review_required: bool = True
     apply_allowed: bool = False
@@ -58,8 +62,16 @@ class PatchDraft:
             raise ValueError("PatchDraft cannot execute or mutate source.")
         if len(self.target_paths) != len(set(self.target_paths)):
             raise ValueError("PatchDraft target paths must be unique.")
+        if tuple(sorted(set(self.candidate_paths))) != self.candidate_paths or not set(self.candidate_paths) <= set(self.target_paths):
+            raise ValueError("PatchDraft candidate paths must be a canonical subset of allowed paths.")
+        if self.status == "draft" and self.candidate_paths != validate_unified_diff(self.patch_text, self.target_paths):
+            raise ValueError("PatchDraft candidate paths differ from the unified diff.")
         for path in self.target_paths:
             _diff_path(path)
+        for scope in (self.allowed_symbol_scope, self.candidate_symbol_scope):
+            if tuple(sorted(set(scope))) != scope or any(not isinstance(row, tuple) or len(row) != 2
+                    or not all(isinstance(value, str) and value for value in row) for row in scope):
+                raise ValueError("PatchDraft symbol scopes must be canonical path-qualified pairs.")
         if self.status == "draft":
             validate_unified_diff(self.patch_text, self.target_paths)
         elif self.patch_text:
@@ -75,10 +87,15 @@ class PatchDraft:
             "base_commit": self.base_commit, "current_commit": self.current_commit,
             "working_tree_sha256": self.working_tree_sha256, "goal": self.goal,
             "target_paths": list(self.target_paths), "target_symbols": list(self.target_symbols),
+            "candidate_paths": list(self.candidate_paths),
             "patch_format": self.patch_format, "patch_text": self.patch_text,
             "evidence_refs": [dict(row) for row in self.evidence_refs],
             "unresolved_evidence": [dict(row) for row in self.unresolved_evidence],
             "validation_requirements": list(self.validation_requirements),
+            "allowed_symbol_scope": [{"file_path": path, "qualified_symbol": symbol}
+                                     for path, symbol in self.allowed_symbol_scope],
+            "candidate_symbol_scope": [{"file_path": path, "qualified_symbol": symbol}
+                                       for path, symbol in self.candidate_symbol_scope],
             "status": self.status, "human_review_required": self.human_review_required,
             "apply_allowed": self.apply_allowed, "execution_allowed": self.execution_allowed,
             "source_mutation_performed": self.source_mutation_performed,
@@ -103,6 +120,12 @@ class SuppliedPatchGenerator:
 
 def _patch_id_payload(payload: dict[str, Any]) -> str:
     payload = {key: value for key, value in payload.items() if key != "patch_id"}
+    if "candidate_paths" in payload and isinstance(payload["candidate_paths"], tuple):
+        payload["candidate_paths"] = list(payload["candidate_paths"])
+    for name in ("allowed_symbol_scope", "candidate_symbol_scope"):
+        value = payload.get(name)
+        if value and isinstance(value[0], tuple):
+            payload[name] = [{"file_path": path, "qualified_symbol": symbol} for path, symbol in value]
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return f"patch-{digest[:16]}"
 
@@ -190,6 +213,12 @@ def _proposal_dict(proposal: Any) -> dict[str, Any]:
     return result
 
 
+def _apply_candidate_text(original: bytes, section: str) -> bytes:
+    """Use Phase 69's exact no-fuzz interpreter for independent pre-approval attribution."""
+    from .patch_application import _apply_text
+    return _apply_text(original, section)
+
+
 def draft_patch(workspace: DeveloperWorkspace, repository: Path, proposal: Any,
                 generator: PatchDraftGenerator, *, plan_run_id: str) -> dict[str, Any]:
     """Accept a candidate only after validating its exact Phase 65/66 source run."""
@@ -237,6 +266,13 @@ def _draft_patch_candidate(workspace: DeveloperWorkspace, repository: Path, prop
         source_context[relative] = source
     candidate = generator.generate(proposed, source_context)
     paths = validate_unified_diff(candidate, tuple(proposed.get("target_paths", ())))
+    allowed_symbols = proposal_allowed_scope(proposed)
+    preimages, postimages = postimages_for_patch(inventory.root, candidate, paths, _apply_candidate_text)
+    candidate_symbols = derive_patch_symbols(candidate, preimages, postimages)
+    if ((allowed_symbols and not scope_is_allowed(candidate_symbols, allowed_symbols, preimages))
+            or (proposed.get("evidence_refs") and not allowed_symbols)
+            or not set(paths) <= set(proposed.get("target_paths", ()))):
+        raise LocalWorkflowError("Candidate patch exceeds path-qualified Phase 65 symbol scope; replan before approval.")
     unresolved_rows = [dict(row) for row in proposed.get("unresolved_evidence", [])]
     if not proposed.get("evidence_refs"):
         unresolved_rows.append({"type": "insufficient_proposal_evidence", "action": "manual_review_required",
@@ -254,9 +290,11 @@ def _draft_patch_candidate(workspace: DeveloperWorkspace, repository: Path, prop
         base_reference=proposed.get("base_reference"), base_commit=proposed.get("base_commit"),
         current_commit=proposed.get("current_commit"), working_tree_sha256=proposed["working_tree_sha256"],
         goal=proposed["goal"], target_paths=tuple(proposed.get("target_paths", ())),
+        candidate_paths=tuple(sorted(paths)),
         target_symbols=tuple(proposed.get("target_symbols", ())), patch_format="unified_diff",
         patch_text=candidate, evidence_refs=tuple(dict(row) for row in proposed.get("evidence_refs", [])),
         unresolved_evidence=unresolved, validation_requirements=("Review evidence and diff.", "Run proposal-recommended validation after separate human authorization."),
+        allowed_symbol_scope=allowed_symbols, candidate_symbol_scope=candidate_symbols,
         status=status, human_review_required=True, apply_allowed=False,
         execution_allowed=False, source_mutation_performed=False,
     )

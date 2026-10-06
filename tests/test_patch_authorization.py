@@ -76,6 +76,10 @@ class PatchAuthorizationTests(unittest.TestCase):
         self.assertEqual(draft["current_commit"], record.current_commit)
         self.assertEqual(draft["working_tree_sha256"], record.working_tree_sha256)
         self.assertEqual(tuple(draft["target_paths"]), record.target_paths)
+        self.assertEqual(tuple((row["file_path"], row["qualified_symbol"])
+                               for row in draft["allowed_symbol_scope"]), record.allowed_symbol_scope)
+        self.assertEqual(tuple((row["file_path"], row["qualified_symbol"])
+                               for row in draft["candidate_symbol_scope"]), record.candidate_symbol_scope)
         self.assertEqual(hashlib.sha256(self.patch.encode()).hexdigest(), record.patch_sha256)
         self.assertEqual(before, self.snapshot())
         self.assertTrue((self.workspace.root / "runs" / result["run_id"] / "results.json").is_file())
@@ -121,6 +125,15 @@ class PatchAuthorizationTests(unittest.TestCase):
         path = self.workspace.root / "runs" / draft["run_id"] / "results.json"
         content = json.loads(path.read_text(encoding="utf-8"))
         content["patch_text"] = content["patch_text"].replace("return 2", "return 3")
+        path.write_bytes((json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        with self.assertRaisesRegex(LocalWorkflowError, "modified"):
+            record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")
+
+    def test_tampered_symbol_scope_run_fails_closed(self):
+        draft = self.draft()
+        path = self.workspace.root / "runs" / draft["run_id"] / "results.json"
+        content = json.loads(path.read_text(encoding="utf-8"))
+        content["candidate_symbol_scope"] = [{"file_path": "app.py", "qualified_symbol": "reset_state"}]
         path.write_bytes((json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
         with self.assertRaisesRegex(LocalWorkflowError, "modified"):
             record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")

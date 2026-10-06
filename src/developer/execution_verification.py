@@ -47,6 +47,9 @@ class ExecutionVerificationSummary:
     expected_target_paths: tuple[str, ...]
     approved_target_paths: tuple[str, ...]
     actual_changed_paths: tuple[str, ...]
+    expected_symbol_scope: tuple[tuple[str, str], ...]
+    approved_symbol_scope: tuple[tuple[str, str], ...]
+    actual_symbol_scope: tuple[tuple[str, str], ...]
     expected_test_identities: tuple[str, ...]
     executed_test_identities: tuple[str, ...]
     missing_test_identities: tuple[str, ...]
@@ -69,7 +72,9 @@ class ExecutionVerificationSummary:
                        "executed_test_identities", "missing_test_identities", "unexpected_test_identities",
                        "deviations", "unexpected_changes",
                        "unresolved_uncertainty", "warnings", "evidence_references"}
-        return {field.name: (list(getattr(self, field.name)) if field.name in list_fields
+        return {field.name: ([{"file_path": p, "qualified_symbol": s} for p, s in getattr(self, field.name)]
+                             if field.name in {"expected_symbol_scope", "approved_symbol_scope", "actual_symbol_scope"}
+                             else list(getattr(self, field.name)) if field.name in list_fields
                              else getattr(self, field.name)) for field in fields(self)}
 
 
@@ -230,7 +235,22 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
             proposal = None
             deviations.append("phase66_proposed_action_missing_or_invalid")
     expected_tests: tuple[str, ...] = ()
+    expected_symbol_scope: tuple[tuple[str, str], ...] = ()
+    approved_symbol_scope: tuple[tuple[str, str], ...] = ()
+    actual_symbol_scope: tuple[tuple[str, str], ...] = ()
     if proposal is not None and draft is not None:
+        from .symbol_scope import proposal_allowed_scope
+        expected_symbol_scope = proposal_allowed_scope(proposal.to_dict())
+        approved_symbol_scope = authorization.allowed_symbol_scope if authorization else ()
+        actual_symbol_scope = tuple((row["file_path"], row["qualified_symbol"])
+                                    for row in execution.get("actual_patch_symbol_scope", ()))
+        if (draft.allowed_symbol_scope != expected_symbol_scope
+                or approved_symbol_scope != expected_symbol_scope
+                or authorization is None
+                or draft.candidate_symbol_scope != authorization.candidate_symbol_scope
+                or not set(actual_symbol_scope) <= set(expected_symbol_scope)
+                or actual_symbol_scope != authorization.candidate_symbol_scope):
+            deviations.append("phase67_68_69_symbol_scope_chain_mismatch")
         targets = set(proposal.target_paths)
         plan_expected = {row.get("file_path") for row in plan.get("implementation_targets", []) if row.get("file_path")}
         plan_symbols = {row.get("qualified_symbol") for row in plan.get("implementation_targets", []) if row.get("qualified_symbol")}
@@ -431,6 +451,9 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
                         "repository_id": execution.get("repository_id"), "status": verification_status,
                         "deviations": sorted(set(deviations)), "uncertainty": sorted(set(uncertainty)),
                         "warnings": sorted(set(warnings)), "actual_paths": list(actual_paths),
+                        "expected_symbols": [list(row) for row in expected_symbol_scope],
+                        "approved_symbols": [list(row) for row in approved_symbol_scope],
+                        "actual_symbols": [list(row) for row in actual_symbol_scope],
                         "selected_tests": list(selected_tests), "repository_state": repository_comparison,
                         "test_outcome": test_outcome}
     verification_id = "verification-" + hashlib.sha256(_json_bytes(identity_payload)).hexdigest()[:20]
@@ -441,7 +464,8 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         execution.get("execution_id", ""), execution_run_id, test_plan_id,
         observation.get("observation_id", ""), observation_run_id,
         tuple(proposal.target_paths if proposal is not None else execution.get("target_paths", ())),
-        approved_paths, actual_paths, expected_tests, selected_tests,
+        approved_paths, actual_paths, expected_symbol_scope, approved_symbol_scope, actual_symbol_scope,
+        expected_tests, selected_tests,
         missing_tests, extra_tests,
         test_outcome, repository_comparison, tuple(sorted(set(deviations))), tuple(sorted(unexpected)),
         tuple(sorted(set(uncertainty))), tuple(sorted(set(warnings))), tuple(refs))
