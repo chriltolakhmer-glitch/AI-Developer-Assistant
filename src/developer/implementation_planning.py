@@ -523,7 +523,8 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
+                expected_tests: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
     for item in impact["unresolved_relationships"]:
         rows.append({"type": "ambiguous_or_unresolved_relationship", "evidence": item,
@@ -557,9 +558,49 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]]) -> list[d
     for item in context.get("relationship_diagnostics", []):
         rows.append({"type": "retrieval_relationship_diagnostic", "evidence": item,
                      "action": "Review this unresolved retrieval relationship manually."})
+    warnings = []
+    test_evidence = {row.get("test"): row for row in expected_tests.get("evidence", [])
+                     if isinstance(row, dict)}
+    selected_tests = set(expected_tests.get("selected_tests", []))
     for item in context.get("omitted_context", []):
-        rows.append({"type": "omitted_context", "evidence": item,
-                     "action": "Inspect omitted context if the implementation depends on it."})
+        path = item.get("file_path")
+        symbol = item.get("symbol_name")
+        module_path = PurePosixPath(path or "")
+        module_parts = list(module_path.with_suffix("").parts)
+        if module_parts and module_parts[-1] == "__init__":
+            module_parts.pop()
+        test_identity = ".".join(module_parts + ([symbol] if symbol else []))
+        test_row = test_evidence.get(test_identity)
+        test_is_independently_bound = (
+            test_identity in selected_tests and test_row is not None
+            and test_row.get("source") in {"planned_target_static_import", "explicit_developer_selection"}
+            and any(target.get("file_path") in test_row.get("target_paths", [])
+                    and target.get("role") != "test_target"
+                    for target in targets)
+        )
+        target_row = next((target for target in targets
+                           if target.get("file_path") == path
+                           and target.get("qualified_symbol") == symbol), None)
+        target_has_independent_evidence = bool(target_row and set(target_row.get("evidence_types", ()))
+                                               & {"retrieval_evidence", "changed_code", "static_relationship"})
+        basis = ({"kind": "exact_expected_test_binding", "test_identity": test_identity,
+                  "selection_source": test_row.get("source"),
+                  "test_file_path": path, "target_paths": test_row.get("target_paths")}
+                 if test_is_independently_bound else
+                 {"kind": "independent_target_evidence", "file_path": path,
+                  "qualified_symbol": symbol,
+                  "evidence_types": sorted(set(target_row.get("evidence_types", ()))
+                                            & {"retrieval_evidence", "changed_code", "static_relationship"})}
+                 if target_has_independent_evidence else None)
+        omission = {"type": "retrieval_omission", "evidence": item,
+                    "classification": "non_blocking" if basis else "blocking",
+                    "basis": basis}
+        if basis:
+            warnings.append(omission)
+        else:
+            rows.append({"type": "omitted_context", "evidence": item,
+                         "classification": "blocking", "basis": None,
+                         "action": "Inspect omitted context because no independent target, dependency, or exact-test evidence establishes it."})
     if not targets:
         rows.append({"type": "missing_implementation_evidence",
                      "evidence": {"goal": impact["retrieval"].get("question")},
@@ -567,7 +608,7 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]]) -> list[d
     rows.append({"type": "runtime_behavior_unverified",
                  "evidence": {"basis": "static parsed-source analysis"},
                  "action": "Confirm dynamic imports, generated code, dispatch, and runtime behavior during implementation review."})
-    return rows
+    return rows, warnings
 
 
 def _steps(targets: list[dict[str, Any]], preserved: list[dict[str, Any]],
@@ -614,8 +655,8 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
     impact = analyze_change_impact(workspace, repository, base=base, question=goal, top_k=top_k)
     targets = _implementation_targets(impact, goal)
     preserved = _preserved_behavior(impact, targets)
-    unresolved = _unresolved(impact, targets)
     expected = _bind_expected_tests(Path(repository), impact, targets, expected_tests)
+    unresolved, warnings = _unresolved(impact, targets, expected)
     impact["tests"] = {**impact["tests"], "selected_tests": expected["selected_tests"],
                        "expected_test_selection": expected}
     if not impact["changes"]["files"]:
@@ -631,7 +672,9 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
     unsupported = impact["changes"]["unsupported_changed_files"]
     if not non_test_targets or expected["status"] == "unknown" or (freshness == "unsupported" and unsupported):
         status = "manual_review_required"
-    elif freshness != "current" or impact["unresolved_relationships"]:
+    elif (freshness != "current" or impact["unresolved_relationships"]
+          or any(row.get("type") not in {"runtime_behavior_unverified", "token_limit_exclusion_summary"}
+                 for row in unresolved)):
         status = "limited"
     else:
         status = "completed"
@@ -663,6 +706,7 @@ def plan_change(workspace: DeveloperWorkspace, repository: Path, *, goal: str,
         "tests_to_update_or_review": guidance,
         "recommended_validation": _validation(impact),
         "unresolved_evidence": unresolved,
+        "warnings": warnings,
         "limitations": list(dict.fromkeys(limitations)),
         "tests_executed": False,
         "source_changes_made": False,

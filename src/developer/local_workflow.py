@@ -41,7 +41,7 @@ from src.scanner import RepositoryScanner
 
 
 DEVELOPER_MODE_NOTICE = "This is a local developer workspace. Results are not benchmark results."
-_INDEX_SCHEMA = "developer-local-index-v4"
+_INDEX_SCHEMA = "developer-local-index-v5"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _IGNORED_DIRECTORIES = frozenset(
     {".git", ".venv", "venv", "__pycache__", "site-packages", "build", "dist",
@@ -379,7 +379,7 @@ class DeveloperWorkspace:
 
     def _indexes(self, inventory: LocalInventory) -> Path:
         # Leave Phase 28/29 snapshots intact; new contracts have a separate namespace.
-        return self._contained(self.root / "indexes" / _safe_component(inventory.repository_id) / "v4")
+        return self._contained(self.root / "indexes" / _safe_component(inventory.repository_id) / "v5")
 
     def inspect(self, repository: Path, changes: bool = False) -> dict[str, Any]:
         root = _resolve_repository_argument(repository)
@@ -542,7 +542,17 @@ class DeveloperWorkspace:
                         if row["chunk_id"] in cached_ids:
                             reused_embeddings.append(Embedding(row["chunk_id"], tuple(float(v) for v in vector), EmbeddingMetadata(**row["metadata"])))
             changed = replace(inventory, files=tuple(f for f in inventory.files if f.relative_path not in unchanged))
-            fresh = _parse_inventory(changed)
+            # Relationship resolution needs the complete parsed module inventory even
+            # when embeddings can be reused. Parse the complete snapshot for static
+            # edges, then embed only changed-file chunks below.
+            resolved = _parse_inventory(inventory)
+            fresh_chunk_paths = {file.relative_path for file in changed.files}
+            fresh_chunks = tuple(chunk for chunk in resolved.chunks if chunk.file_path in fresh_chunk_paths)
+            fresh_context = {chunk_id: row for chunk_id, row in resolved.context.items()
+                             if row.get("source_region", "").split(":", 1)[0] in fresh_chunk_paths}
+            fresh_failures = tuple(row for row in resolved.parse_failures
+                                   if row["file_path"] in fresh_chunk_paths)
+            fresh = ParsedLocalCode(changed, fresh_chunks, fresh_failures, fresh_context)
             try:
                 if fresh.chunks:
                     new_embeddings, new_rejections = _embed_developer_chunks(
@@ -551,12 +561,28 @@ class DeveloperWorkspace:
                     new_embeddings, new_rejections = (), ()
             except Exception as error:
                 raise LocalWorkflowError(f"Could not index with the pinned local model: {error}. Check WORKSPACE/model-cache; run prototype local inspect PATH for coverage.") from error
+            id_remap = {row["original_chunk_id"]: chunk_id
+                        for chunk_id, row in fresh.context.items()
+                        if row.get("original_chunk_id") and chunk_id != row["original_chunk_id"]}
+            combined_context = dict(fresh.context)
+            for chunk_id, resolved_details in resolved.context.items():
+                cached_details = cached_context.get(chunk_id) if resolved_details.get("source_region", "").split(":", 1)[0] not in fresh_chunk_paths else None
+                if cached_details is None:
+                    continue
+                merged = dict(cached_details)
+                for key in ("relationship_edges", "related_chunk_ids", "relationship_diagnostics",
+                            "import_bindings", "import_resolution_diagnostics", "imports",
+                            "related_symbol_names", "called_symbol_names", "called_expressions"):
+                    if key in resolved_details:
+                        merged[key] = resolved_details[key]
+                merged["related_chunk_ids"] = sorted({id_remap.get(related, related)
+                                                       for related in resolved_details.get("related_chunk_ids", ())})
+                combined_context[chunk_id] = merged
             parsed = ParsedLocalCode(
                 inventory,
                 tuple(sorted(cached_chunks + list(fresh.chunks), key=lambda c: c.chunk_id)),
                 tuple(sorted(cached_failures + list(fresh.parse_failures), key=lambda f: f["file_path"])),
-                {**{chunk_id: cached_context[chunk_id] for chunk_id in cached_context
-                    if chunk_id in {chunk.chunk_id for chunk in cached_chunks}}, **fresh.context},
+                combined_context,
             )
             stale_symbol_count = len({chunk.qualified_name for chunk in cached_chunks if chunk.file_path in changed_files} -
                                      {chunk.qualified_name for chunk in parsed.chunks if chunk.file_path in changed_files})
@@ -612,7 +638,7 @@ class DeveloperWorkspace:
             repo_indexes = self._indexes(inventory)
             active = self._read_active(repo_indexes)
         else:
-            active_files = sorted((self.root / "indexes").glob("*/v4/active.json"))
+            active_files = sorted((self.root / "indexes").glob("*/v5/active.json"))
             if not active_files:
                 raise LocalWorkflowError(
                     f"No developer index exists under '{self.root / 'indexes'}'. "
@@ -889,7 +915,7 @@ class DeveloperWorkspace:
             raise LocalWorkflowError(f"Case '{case_id}' was not found in '{cases_path}'.")
         self._prepare()
         if repository is None:
-            active_files = sorted((self.root / "indexes").glob("*/v4/active.json"))
+            active_files = sorted((self.root / "indexes").glob("*/v5/active.json"))
             if not active_files:
                 index = None
                 root = None
@@ -1325,6 +1351,7 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
             failures.append({"file_path": error.relative_path, "line": error.line, "message": error.message})
         except (OSError, UnicodeError, ValueError) as error:
             failures.append({"file_path": file.relative_path, "line": None, "message": str(error)})
+    _resolve_relative_imports(context)
     by_leaf_name: dict[str, list[str]] = {}
     for chunk in chunks:
         by_leaf_name.setdefault(chunk.qualified_name.rsplit(".", 1)[-1], []).append(chunk.chunk_id)
@@ -1336,7 +1363,7 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
     chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
     for chunk_id, details in context.items():
         edges = []
-        diagnostics = []
+        diagnostics = list(details.get("import_resolution_diagnostics", []))
         targets = (
             ("import_relationship", details.get("related_symbol_names", [])),
             ("call_relationship", details.get("called_symbol_names", [])),
@@ -1347,22 +1374,55 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
                 candidates = [chunks_by_id[target_id] for target_id in by_leaf_name.get(name, ())
                               if target_id != chunk_id]
 
-                def declared_for(target):
+                def declared_for(target, call_expression=None):
                     module_parts = PurePosixPath(target.file_path).with_suffix("").parts
                     if module_parts and module_parts[-1] == "__init__":
                         module_parts = module_parts[:-1]
                     target_module = ".".join(module_parts)
                     top_level = target.qualified_name.split(".", 1)[0]
                     imports = set(details.get("imports", []))
-                    return (f"{target_module}.{target.qualified_name}" in imports
+                    if (f"{target_module}.{target.qualified_name}" in imports
                             or f"{target_module}.{top_level}" in imports
-                            or (target_module in imports and name == target_module.rsplit(".", 1)[-1]))
+                            or (target_module in imports and name == target_module.rsplit(".", 1)[-1])):
+                        return True
+                    for binding in details.get("import_bindings", []):
+                        if binding.get("module") != target_module:
+                            continue
+                        imported = binding.get("imported_name")
+                        if kind == "call_relationship":
+                            expression = call_expression or name
+                            binding_name = binding.get("binding") or ""
+                            if imported is None:
+                                if not expression.startswith(binding_name + "."):
+                                    continue
+                                referenced = expression[len(binding_name) + 1:]
+                                qualifier = binding.get("module_qualifier") or ""
+                                if qualifier:
+                                    if not referenced.startswith(qualifier + "."):
+                                        continue
+                                    referenced = referenced[len(qualifier) + 1:]
+                                if (referenced == target.qualified_name
+                                        or referenced == target.qualified_name.rsplit(".", 1)[-1]):
+                                    return True
+                                continue
+                            if expression != binding_name and not expression.startswith(binding_name + "."):
+                                continue
+                        if imported is None:
+                            if kind == "import_relationship" or target.qualified_name.rsplit(".", 1)[-1] == name:
+                                return True
+                        elif (target.qualified_name == imported
+                              or target.qualified_name.startswith(imported + ".")):
+                            return True
+                    return False
 
                 # Calls within a file can be linked only when the called leaf is
                 # unique. Cross-file candidates require a matching import path.
+                expressions = details.get("called_expressions", []) if kind == "call_relationship" else []
                 eligible = [target for target in candidates
                             if (target.file_path == source.file_path and kind == "call_relationship")
-                            or declared_for(target)]
+                            or (any(declared_for(target, expression) for expression in expressions
+                                    if expression.rsplit(".", 1)[-1] == name)
+                                if kind == "call_relationship" else declared_for(target))]
                 if len(eligible) > 1:
                     diagnostics.append({"symbol": name, "kind": kind, "status": "ambiguous",
                                         "reason": "multiple same-name targets satisfy available file/import evidence",
@@ -1431,11 +1491,115 @@ def _parse_inventory(inventory: LocalInventory) -> ParsedLocalCode:
     return ParsedLocalCode(inventory, tuple(chunks), tuple(failures), context)
 
 
+def _resolve_relative_imports(context: dict[str, dict[str, Any]]) -> None:
+    """Normalize package-relative imports against the statically parsed repository."""
+    module_paths: dict[str, str] = {}
+    module_names: dict[str, set[str]] = {}
+    for details in context.values():
+        module_name = details["module_name"]
+        path = details["source_region"].split(":", 1)[0]
+        module_paths[module_name] = path
+        module_names.setdefault(module_name, set()).update(details.get("top_level_defined_names", ()))
+
+    resolved_by_module: dict[str, tuple[list[str], list[dict[str, str | None]], list[dict[str, Any]]]] = {}
+    for details in context.values():
+        module_name = details["module_name"]
+        if module_name in resolved_by_module:
+            continue
+        path = PurePosixPath(details["source_region"].split(":", 1)[0])
+        package_parts = module_name.split(".") if module_name else []
+        if path.name != "__init__.py":
+            package_parts = package_parts[:-1]
+        imports: list[str] = []
+        bindings: list[dict[str, str | None]] = []
+        diagnostics: list[dict[str, Any]] = []
+        for declaration in details.get("import_declarations", []):
+            level = declaration.get("level", 0)
+            module = declaration.get("module")
+            name = declaration.get("name", "")
+            if not level:
+                imports.append(name if module is None else f"{module}.{name}")
+                if declaration.get("import_kind") == "import" and name in module_paths:
+                    binding = declaration.get("alias") or name.split(".")[0]
+                    qualifier = "" if declaration.get("alias") else ".".join(name.split(".")[1:])
+                    bindings.append({"module": name, "imported_name": None,
+                                     "binding": binding, "module_qualifier": qualifier})
+                elif module in module_paths and name in module_names.get(module, set()):
+                    bindings.append({"module": module, "imported_name": name,
+                                     "binding": declaration.get("alias") or name,
+                                     "module_qualifier": ""})
+                continue
+            base = package_parts[:]
+            ascents = level - 1
+            if ascents > len(base):
+                diagnostics.append({"symbol": name, "kind": "import_relationship", "status": "unresolved",
+                                    "reason": "relative import walks beyond the repository package root",
+                                    "candidates": []})
+                continue
+            if ascents:
+                base = base[:-ascents]
+            target_parts = base + (module.split(".") if module else [])
+            target_module = ".".join(target_parts)
+            if module:
+                if target_module not in module_paths:
+                    diagnostics.append({"symbol": name, "kind": "import_relationship", "status": "unresolved",
+                                        "reason": "relative import target module is not present in parsed repository source",
+                                        "candidates": []})
+                    continue
+                has_symbol = name in module_names.get(target_module, set())
+                child_module = f"{target_module}.{name}"
+                has_module = child_module in module_paths
+            else:
+                has_symbol = name in module_names.get(target_module, set())
+                child_module = f"{target_module}.{name}" if target_module else name
+                has_module = child_module in module_paths
+            if has_symbol and has_module:
+                candidates = sorted({module_paths[target_module], module_paths[child_module]})
+                diagnostics.append({"symbol": name, "kind": "import_relationship", "status": "ambiguous",
+                                    "reason": "relative imported name matches both a parsed binding and module",
+                                    "candidates": candidates})
+            elif has_symbol:
+                imports.append(f"{target_module}.{name}".strip("."))
+                bindings.append({"module": target_module, "imported_name": name,
+                                 "binding": declaration.get("alias") or name,
+                                 "module_qualifier": ""})
+            elif has_module:
+                imports.append(child_module)
+                bindings.append({"module": child_module, "imported_name": None,
+                                 "binding": declaration.get("alias") or name,
+                                 "module_qualifier": ""})
+            else:
+                diagnostics.append({"symbol": name, "kind": "import_relationship", "status": "unresolved",
+                                    "reason": "relative imported name cannot be mapped to a parsed module or top-level binding",
+                                    "candidates": []})
+        resolved_by_module[module_name] = (sorted(set(imports)), bindings, diagnostics)
+
+    for details in context.values():
+        imports, bindings, diagnostics = resolved_by_module[details["module_name"]]
+        details["imports"] = imports
+        details["related_symbol_names"] = sorted({item.rsplit(".", 1)[-1] for item in imports})
+        details["import_bindings"] = bindings
+        details["import_resolution_diagnostics"] = diagnostics
+
+
 def _developer_context(module: Any, source: str, chunks: tuple[CodeChunk, ...]) -> dict[str, dict[str, Any]]:
     """Build source-structure metadata kept only in the developer index sidecar."""
     tree = ast.parse(source, filename=module.relative_path, type_comments=True)
     by_name = {chunk.qualified_name: chunk for chunk in chunks}
     imports = sorted({item.name if item.module is None else f"{item.module}.{item.name}" for item in module.imports})
+    import_declarations = [{"import_kind": item.import_kind, "module": item.module,
+                            "name": item.name, "alias": item.alias, "level": item.level}
+                           for item in module.imports]
+    top_level_defined_names = set()
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            top_level_defined_names.add(statement.name)
+        elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            top_level_defined_names.update(target.id for target in targets if isinstance(target, ast.Name))
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            top_level_defined_names.update(alias.asname or alias.name.split(".")[0]
+                                           for alias in statement.names)
     constants = sorted({node.targets[0].id for node in ast.walk(tree)
                         if isinstance(node, ast.Assign) and node.targets
                         and isinstance(node.targets[0], ast.Name)
@@ -1456,6 +1620,13 @@ def _developer_context(module: Any, source: str, chunks: tuple[CodeChunk, ...]) 
             and chunk.start_line <= getattr(node, "lineno", -1) <= chunk.end_line
             and isinstance(node.func, (ast.Name, ast.Attribute))
         })
+        called_expressions = sorted({
+            ast.unparse(node.func)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and chunk.start_line <= getattr(node, "lineno", -1) <= chunk.end_line
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+        })
         related = []
         if parent in by_name:
             related.append(by_name[parent].chunk_id)
@@ -1465,11 +1636,14 @@ def _developer_context(module: Any, source: str, chunks: tuple[CodeChunk, ...]) 
                   and item.start_line <= chunk.end_line + 3 and item.end_line >= chunk.start_line - 3]
         result[chunk.chunk_id] = {
             "module_name": module.name,
+            "import_declarations": import_declarations,
+            "top_level_defined_names": sorted(top_level_defined_names),
             "symbol_name": chunk.qualified_name,
             "parent_symbol": parent,
             "imports": imports,
             "related_symbol_names": sorted({item.rsplit(".", 1)[-1] for item in imports}),
             "called_symbol_names": called_names,
+            "called_expressions": called_expressions,
             "configuration_keys": constants,
             "related_chunk_ids": sorted(set(related)),
             "nearby_chunk_ids": sorted(nearby),

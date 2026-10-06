@@ -71,7 +71,7 @@ class TestExecutionObservationTests(unittest.TestCase):
                      "        subprocess.run(['git', 'status', '--porcelain'], check=True, capture_output=True)"]
         (self.repo / "tests" / "test_app.py").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
-    def _record_phase65_plan(self, inventory, *, uncertain=False):
+    def _record_phase65_plan(self, inventory, *, uncertain=False, warnings=()):
         targets = [{"file_path": "app.py", "qualified_symbol": "value", "role": "primary_target",
                     "evidence_types": ["changed_code"], "reasons": ["fixture evidence"],
                     "current_index_evidence": False}]
@@ -88,12 +88,13 @@ class TestExecutionObservationTests(unittest.TestCase):
                    "goal": "Change value function", "repository": repository,
                    "change_impact": {**impact, "tests": tests}, "proposed_action": proposal.to_dict(),
                    "implementation_targets": targets, "tests": tests, "unresolved_evidence": [],
+                   "warnings": list(warnings),
                    "tests_executed": False, "source_changes_made": False}
         payload["run_id"] = self.workspace._record_run("plan-change", inventory, payload)
         self.proposal = proposal.to_dict()
         return payload["run_id"]
 
-    def _reapply_with_test_mode(self, mode, *, uncertain=False):
+    def _reapply_with_test_mode(self, mode, *, uncertain=False, warnings=()):
         # Rebuild the disposable repository state before creating a fresh Phase 69 chain.
         self.git("checkout", "--", "app.py")
         self._write_tests(mode)
@@ -103,7 +104,7 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.index = _git_index_state(self.repo)
         self.workspace = DeveloperWorkspace(self.workspace.root.parent / f"workspace-{mode}")
         inventory = scan_local_repository(self.repo)
-        self.plan_run_id = self._record_phase65_plan(inventory, uncertain=uncertain)
+        self.plan_run_id = self._record_phase65_plan(inventory, uncertain=uncertain, warnings=warnings)
         draft = draft_patch(self.workspace, self.repo, self.proposal,
                             SuppliedPatchGenerator(self.patch_text))
         approval = record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")
@@ -143,6 +144,26 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.assertEqual(head, self.git("rev-parse", "HEAD"))
         self.assertEqual(index, _git_index_state(self.repo))
         self.assertEqual(target, (self.repo / "app.py").read_bytes())
+
+    def test_phase71_preserves_nonblocking_retrieval_omission_warning(self):
+        omission = {"type": "retrieval_omission", "classification": "non_blocking",
+                    "evidence": {"file_path": "tests/test_app.py", "symbol_name": "AppTests.test_value",
+                                 "reason": "relationship expansion limit"},
+                    "basis": {"kind": "exact_expected_test_binding",
+                              "test_identity": "tests.test_app.AppTests.test_value"}}
+        self.git("checkout", "--", "app.py")
+        self.workspace = DeveloperWorkspace(self.workspace.root.parent / "workspace-warning")
+        inventory = scan_local_repository(self.repo)
+        self.plan_run_id = self._record_phase65_plan(inventory, warnings=(omission,))
+        draft = draft_patch(self.workspace, self.repo, self.proposal,
+                            SuppliedPatchGenerator(self.patch_text))
+        approval = record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")
+        self.applied = apply_approved_patch(self.workspace, self.repo, approval["run_id"])
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        result = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertEqual("verified", result["status"], result["deviations"])
+        self.assertIn("phase65_retrieval_context_omitted_but_independently_grounded:tests/test_app.py:AppTests.test_value",
+                      result["warnings"])
 
     def test_phase71_blocks_failed_tests_and_phase70_side_effects(self):
         self._reapply_with_test_mode("fail")

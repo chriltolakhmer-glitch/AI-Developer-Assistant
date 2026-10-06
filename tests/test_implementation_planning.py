@@ -126,6 +126,35 @@ class ImplementationPlanningTests(unittest.TestCase):
         self.assertEqual("planned_target_static_import", selected["evidence"][0]["source"])
         self.assertIn("src/app.py", selected["evidence"][0]["target_paths"])
 
+    def test_omitted_context_for_exactly_bound_test_is_visible_warning(self):
+        self.index()
+        query = self.query_payload()
+        query["context"]["omitted_context"] = [{
+            "chunk_id": "omitted-test-chunk", "file_path": "tests/test_app.py",
+            "symbol_name": "AppTests.test_run", "reason": "relationship expansion limit",
+        }]
+        report = self.plan(query=query)
+        omission = next(row for row in report["warnings"] if row["type"] == "retrieval_omission")
+        self.assertEqual("non_blocking", omission["classification"])
+        self.assertEqual("exact_expected_test_binding", omission["basis"]["kind"])
+        self.assertIn("tests.test_app.AppTests.test_run",
+                      report["tests"]["expected_test_selection"]["selected_tests"])
+        self.assertNotIn("omitted_context", {row["type"] for row in report["unresolved_evidence"]})
+        self.assertEqual("completed", report["status"])
+
+    def test_omitted_context_without_independent_target_or_test_evidence_blocks(self):
+        self.index()
+        query = self.query_payload()
+        query["context"]["omitted_context"] = [{
+            "chunk_id": "unproven-contract-chunk", "file_path": "tests/test_app.py",
+            "symbol_name": "AppTests.test_discount_contract", "reason": "relationship expansion limit",
+        }]
+        report = self.plan(query=query)
+        omission = next(row for row in report["unresolved_evidence"] if row["type"] == "omitted_context")
+        self.assertEqual("blocking", omission["classification"])
+        self.assertIsNone(omission["basis"])
+        self.assertEqual("limited", report["status"])
+
     def test_validated_plan_accepts_canonical_proposal_and_rejects_tampering(self):
         from src.developer.proposal_evidence import validated_plan
         from src.developer.local_workflow import _json_bytes

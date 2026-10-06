@@ -5259,7 +5259,7 @@ class DeveloperModeTests(unittest.TestCase):
             result = self.developer.query("Settings.__init__ configuration", self.repository)
             analysis = self.developer.analyze_context("Settings.__init__ configuration", self.repository)
         self.assertGreater(inspection["chunk_counts"]["bounded"], 0)
-        self.assertEqual("developer-local-index-v4", inspection["index_schema_version"])
+        self.assertEqual("developer-local-index-v5", inspection["index_schema_version"])
         self.assertTrue(result["context"]["budget_diagnostics"])
         self.assertTrue(analysis["budget_diagnostics"])
         visible_symbols = {row["qualified_name"] for row in result["results"]}
@@ -5376,12 +5376,12 @@ class DeveloperModeTests(unittest.TestCase):
 
     def test_phase61_index_v4_rejects_legacy_schema(self):
         self._optimization_setup()
-        active_path = next((self.workspace_path / "indexes").glob("*/v4/active.json"))
+        active_path = next((self.workspace_path / "indexes").glob("*/v5/active.json"))
         active = json.loads(active_path.read_text(encoding="utf-8"))
         index_path = active_path.parent / active["snapshot_id"]
         manifest_path = index_path / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual("developer-local-index-v4", manifest["schema_version"])
+        self.assertEqual("developer-local-index-v5", manifest["schema_version"])
         manifest["schema_version"] = "developer-local-index-v3"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         with self.assertRaisesRegex(LocalWorkflowError, "Unsupported developer index"):

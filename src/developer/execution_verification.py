@@ -274,6 +274,15 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
             uncertainty.append("phase65_plan_contains_blocking_unresolved_evidence")
         if unresolved_rows and not blocking_rows:
             warnings.append("phase65_static_plan_retains_runtime_behavior_uncertainty_outside_executed_test_scope")
+        for item in plan.get("warnings", []):
+            if (not isinstance(item, dict) or item.get("type") != "retrieval_omission"
+                    or item.get("classification") != "non_blocking" or not item.get("basis")):
+                uncertainty.append("phase65_informational_evidence_classification_invalid")
+                continue
+            evidence = item.get("evidence", {})
+            warnings.append("phase65_retrieval_context_omitted_but_independently_grounded:"
+                            + str(evidence.get("file_path", "unknown")) + ":"
+                            + str(evidence.get("symbol_name", "unknown")))
         expected_proposal = ProposedAction.from_plan(
             plan.get("change_impact", {}), plan.get("implementation_targets", []),
             plan.get("goal", ""), plan.get("unresolved_evidence", []))

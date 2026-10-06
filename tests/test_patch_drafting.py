@@ -148,6 +148,19 @@ class PatchDraftingTests(unittest.TestCase):
         self.assertEqual(result["source_action_id"], "proposal-second")
         self.assertEqual(result["unresolved_evidence"], proposal["unresolved_evidence"])
 
+    def test_genuinely_required_omitted_context_still_blocks_phase67(self):
+        proposal = dict(self.proposal, action_id="proposal-omitted-context",
+                        unresolved_evidence=[{
+                            "type": "omitted_context", "classification": "blocking",
+                            "evidence": {"file_path": "tests/test_app.py",
+                                         "symbol_name": "AppTests.test_contract"},
+                            "action": "Inspect omitted context because no independent evidence establishes it.",
+                        }])
+        result = draft_patch(self.workspace, self.repo, proposal, SuppliedPatchGenerator(self.patch))
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("", result["patch_text"])
+        self.assertEqual("omitted_context", result["unresolved_evidence"][0]["type"])
+
     def test_informational_runtime_uncertainty_is_preserved_without_blocking(self):
         proposal = dict(self.proposal, unresolved_evidence=[{
             "type": "runtime_behavior_unverified", "action": "Confirm runtime dispatch during review"
