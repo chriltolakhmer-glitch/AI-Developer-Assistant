@@ -104,7 +104,134 @@ def _read_run(workspace: DeveloperWorkspace, run_id: str, kind: str) -> tuple[di
         raise LocalWorkflowError(f"Phase 71 {kind} evidence is missing, malformed, or tampered.") from error
 
 
-def _valid_phase65_informational_warning(item: Any, plan: dict[str, Any]) -> bool:
+def _valid_exact_leaf_warning(item: dict[str, Any], plan: dict[str, Any], root: Path,
+                              execution: dict[str, Any], authorization: Any) -> bool:
+    """Reconstruct unchanged historical containers, not the edited postimage.
+
+    Hash/range/identity checks are independent of Phase 65's classification.
+    Current execution and authorization are still validated by the full verifier.
+    """
+    import io
+    import tokenize
+    from src.chunker import CodeChunker
+    from src.models.corpus import RepositoryMetadata
+    from src.parser import PythonAstParser
+    from src.developer_testing import catalog
+
+    try:
+        impact = plan["change_impact"]
+        basis, evidence = item["basis"], item["evidence"]
+        exclusions = impact["changes"]["token_limit_exclusions"]
+        container = basis["container"]
+        path = container["file_path"]
+        repository = plan["repository"]
+        if (not isinstance(container, dict)
+                or any(type(container[key]) is not int for key in ("start_line", "end_line"))
+                or any(type(evidence[key]) is not int for key in ("start_line", "end_line"))
+                or not isinstance(basis.get("proofs"), list)
+                or any(not isinstance(proof, dict) or
+                       any(type(proof[key]) is not int for key in ("start_line", "end_line"))
+                       for proof in basis["proofs"])):
+            return False
+        if (evidence not in exclusions or evidence["reason"] != "over_limit"
+                or impact["index_freshness"]["status"] != "current"
+                or impact["changes"].get("parser_failures")
+                or any(row["path"] == path for row in impact["changes"]["files"])
+                or execution["repository_before"] != repository["current_commit"]
+                or execution["working_tree_before"] != repository["working_tree_sha256"]
+                or execution["repository_id"] != repository["repository_id"]
+                or authorization is None):
+            return False
+        # Parser/chunker validate repository-relative paths before Git lookup.
+        path = CodeChunker._validate_relative_path(path)
+        commit = repository["current_commit"]
+        if not re.fullmatch(r"[0-9a-f]{40}", commit):
+            return False
+        source_bytes = _git(root, ["show", f"{commit}:{path}"])
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(source_bytes).readline)
+        source = io.TextIOWrapper(io.BytesIO(source_bytes), encoding=encoding).read()
+        parsed = PythonAstParser().parse(source, path)
+        chunks = CodeChunker().chunk_module(parsed, source, RepositoryMetadata(repository["repository_id"], commit))
+        parent = next(chunk for chunk in chunks if chunk.chunk_id == evidence["chunk_id"])
+        expected_parent = {"chunk_id": parent.chunk_id, "file_path": path,
+                           "qualified_symbol": parent.qualified_name, "entity_type": parent.entity_type,
+                           "start_line": parent.start_line, "end_line": parent.end_line,
+                           "content_sha256": hashlib.sha256(parent.content.encode()).hexdigest()}
+        if (container != expected_parent or parent.entity_type not in {"module", "class"}
+                or any(evidence[key] != getattr(parent, attr) for key, attr in (
+                    ("file_path", "file_path"), ("qualified_name", "qualified_name"),
+                    ("start_line", "start_line"), ("end_line", "end_line")))):
+            return False
+        affected = [row for row in plan["implementation_targets"] if row["file_path"] == path
+                    and (row.get("qualified_symbol") == parent.qualified_name
+                         or row.get("start_line") is None
+                         or parent.start_line <= row["start_line"] <= parent.end_line)]
+        proofs = basis["proofs"]
+        if not affected or not isinstance(proofs, list) or len(proofs) != len(affected):
+            return False
+        included = impact["retrieval"]["context_diagnostics"]["included_context"]
+        excluded = {row["chunk_id"] for row in exclusions}
+        expected_proofs = []
+        selection = plan["tests"]["expected_test_selection"]
+        known = {identity for rows in catalog(root).values() for identity in rows}
+        scope = {(row["file_path"], row["qualified_symbol"]) for row in affected}
+        parent_scope = {(path, parent.qualified_name), (path, "<module>")}
+        allowed = set(authorization.allowed_symbol_scope)
+        actual = {(row["file_path"], row["qualified_symbol"]) for row in execution["actual_patch_symbol_scope"]}
+        from .symbol_scope import proposal_allowed_scope
+        if (allowed != set(proposal_allowed_scope(plan["proposed_action"]))
+                or not scope <= allowed or parent_scope & allowed
+                or actual != set(authorization.candidate_symbol_scope) or not actual <= allowed
+                or any(p == path and (p, symbol) not in scope for p, symbol in actual)):
+            return False
+        for target in affected:
+            role = target["role"]
+            if role not in {"primary_target", "test_target"} or target.get("current_index_evidence") is not True:
+                return False
+            leaf = next(chunk for chunk in chunks if chunk.qualified_name == target["qualified_symbol"])
+            digest = hashlib.sha256(leaf.content.encode()).hexdigest()
+            if (leaf.entity_type not in {"function", "method"} or leaf.chunk_id in excluded
+                    or leaf.chunk_id == parent.chunk_id
+                    or not parent.start_line <= leaf.start_line <= leaf.end_line <= parent.end_line
+                    or (parent.entity_type == "class" and not leaf.qualified_name.startswith(parent.qualified_name + "."))
+                    or any(target.get(key) is not None and
+                           (type(target[key]) is not int or target[key] != getattr(leaf, key))
+                           for key in ("start_line", "end_line"))
+                    or not any(row.get("file_path") == path and row.get("symbol_name") == leaf.qualified_name
+                               and row.get("content_sha256") == digest for row in included)):
+                return False
+            proof = {"kind": "exact_retained_primary_leaf" if role == "primary_target" else "exact_retained_test_leaf",
+                     "chunk_id": leaf.chunk_id, "file_path": path, "qualified_symbol": leaf.qualified_name,
+                     "start_line": leaf.start_line, "end_line": leaf.end_line,
+                     "content_sha256": digest, "target_role": role}
+            if role == "primary_target":
+                if ("retrieval_evidence" not in target.get("evidence_types", [])
+                        or target.get("start_line") != leaf.start_line or target.get("end_line") != leaf.end_line
+                        or not any(row.get("file_path") == path and row.get("symbol") == leaf.qualified_name
+                                   and row.get("start_line") == leaf.start_line and row.get("end_line") == leaf.end_line
+                                   for row in impact["retrieval"]["query_evidence"])):
+                    return False
+            else:
+                from .implementation_planning import _EXACT_TEST_BINDING_SOURCES
+                identity = ".".join((*Path(path).with_suffix("").parts, leaf.qualified_name))
+                bindings = [row for row in selection["evidence"] if row.get("test") == identity]
+                if (identity not in known or selection["status"] != "known"
+                        or identity not in selection["selected_tests"] or identity not in plan["tests"]["selected_tests"]
+                        or len(bindings) != 1 or bindings[0].get("source") not in _EXACT_TEST_BINDING_SOURCES
+                        or path not in bindings[0].get("target_paths", [])):
+                    return False
+                proof.update(test_identity=identity, expected_test_binding_source=bindings[0]["source"])
+            expected_proofs.append(proof)
+        kinds = {proof["kind"] for proof in expected_proofs}
+        expected_kind = next(iter(kinds)) if len(kinds) == 1 else "exact_retained_leaf_evidence"
+        return (basis == {"kind": expected_kind, "container": expected_parent,
+                          "proofs": sorted(expected_proofs, key=lambda row: (row["file_path"], row["qualified_symbol"]))})
+    except (KeyError, TypeError, ValueError, AttributeError, StopIteration, OSError, LocalWorkflowError):
+        return False
+
+
+def _valid_phase65_informational_warning(item: Any, plan: dict[str, Any], *, root: Path | None = None,
+                                        execution: dict[str, Any] | None = None, authorization: Any = None) -> bool:
     """Validate recorded informational proof against historical Phase 65 evidence.
 
     Do not consult the legitimately changed post-application source snapshot.
@@ -115,9 +242,14 @@ def _valid_phase65_informational_warning(item: Any, plan: dict[str, Any]) -> boo
     if not isinstance(evidence, dict) or not evidence or not isinstance(basis, dict) or not basis:
         return False
     if item.get("type") == "retrieval_omission":
-        return True  # Preserve the existing retrieval-omission proof contract.
+        # Preserve existing retrieval-omission proofs; container proofs cannot be relabeled.
+        return basis.get("kind") not in {"exact_retained_primary_leaf", "exact_retained_test_leaf",
+                                         "exact_retained_leaf_evidence", "retained_descendant_evidence"}
     if item.get("type") != "token_limit_exclusion":
         return False
+    if basis.get("kind") in {"exact_retained_primary_leaf", "exact_retained_test_leaf", "exact_retained_leaf_evidence"}:
+        return (root is not None and execution is not None
+                and _valid_exact_leaf_warning(item, plan, root, execution, authorization))
     try:
         impact = plan["change_impact"]
         exclusions = impact["changes"]["token_limit_exclusions"]
@@ -328,7 +460,8 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         if unresolved_rows and not blocking_rows:
             warnings.append("phase65_static_plan_retains_runtime_behavior_uncertainty_outside_executed_test_scope")
         for item in plan.get("warnings", []):
-            if not _valid_phase65_informational_warning(item, plan):
+            if not _valid_phase65_informational_warning(item, plan, root=root,
+                                                       execution=execution, authorization=authorization):
                 uncertainty.append("phase65_informational_evidence_classification_invalid")
                 continue
             evidence = item.get("evidence", {})

@@ -524,16 +524,19 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _container_exclusion_basis(item: dict[str, Any], impact: dict[str, Any],
-                               targets: list[dict[str, Any]], repository: Path) -> dict[str, Any] | None:
+                               targets: list[dict[str, Any]], repository: Path,
+                               expected_tests: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Prove supporting container evidence from exact retained parsed descendants.
 
-    Primary/changed containers and leaf bodies still require their own evidence.
+    Exact primary/test leaves may prove an unchanged parent, never its scope.
     Same-file presence, selected tests, and supplied relationship labels alone
     cannot establish this proof.
     """
-    from .local_workflow import parse_local_repository
+    from .local_workflow import parse_local_repository, _git
 
-    if impact["index_freshness"].get("status") != "current":
+    if (impact["index_freshness"].get("status") != "current"
+            or item.get("reason") != "over_limit"
+            or any(type(item.get(key)) is not int for key in ("start_line", "end_line"))):
         return None
     parsed = parse_local_repository(repository)
     if (parsed.inventory.snapshot_id != impact["repository"].get("working_tree_sha256")
@@ -555,9 +558,15 @@ def _container_exclusion_basis(item: dict[str, Any], impact: dict[str, Any],
     # conservatively, rather than declaring an unproven sibling irrelevant.
     affected.extend(row for row in targets if row["file_path"] == container.file_path
                     and row not in affected and row.get("start_line") is None)
-    if not affected or any(row["role"] != "related_context" for row in affected):
+    if not affected:
         return None
     if any(row["path"] == container.file_path for row in impact["changes"]["files"]):
+        return None
+    try:
+        _git(repository, ["ls-files", "--error-unmatch", "--", container.file_path])
+        if _git(repository, ["diff", "HEAD", "--name-only", "--", container.file_path]).strip():
+            return None
+    except LocalWorkflowError:
         return None
     excluded = {row["chunk_id"] for row in impact["changes"]["token_limit_exclusions"]}
     included = impact["retrieval"].get("context_diagnostics", {}).get("included_context", [])
@@ -576,6 +585,9 @@ def _container_exclusion_basis(item: dict[str, Any], impact: dict[str, Any],
                    and container.start_line <= chunk.start_line <= chunk.end_line <= container.end_line
                    and (container.entity_type == "module"
                         or chunk.qualified_name.startswith(container.qualified_name + "."))]
+    if any(row["role"] != "related_context" for row in affected):
+        return _exact_container_leaves(container, descendants, affected, impact,
+                                       expected_tests or {}, repository)
     proofs = []
     for target in affected:
         candidates = descendants if target["qualified_symbol"] == container.qualified_name else [
@@ -596,6 +608,64 @@ def _container_exclusion_basis(item: dict[str, Any], impact: dict[str, Any],
             "proofs": proofs}
 
 
+_EXACT_TEST_BINDING_SOURCES = frozenset({"planned_target_static_import", "explicit_developer_selection",
+                                         "changed_file_dependency_selection"})
+
+
+def _exact_container_leaves(container: Any, descendants: list[Any], targets: list[dict[str, Any]],
+                            impact: dict[str, Any], expected: dict[str, Any],
+                            repository: Path) -> dict[str, Any] | None:
+    """Require every affected target to be an exact retained executable leaf."""
+    from src.developer_testing import catalog
+
+    known = {identity for rows in catalog(repository).values() for identity in rows}
+    proofs = []
+    for target in targets:
+        role = target.get("role")
+        if role not in {"primary_target", "test_target"} or target.get("current_index_evidence") is not True:
+            return None
+        leaves = [chunk for chunk in descendants
+                  if chunk.entity_type in {"function", "method"}
+                  and chunk.file_path == target["file_path"]
+                  and chunk.qualified_name == target["qualified_symbol"]]
+        if len(leaves) != 1:
+            return None
+        leaf = leaves[0]
+        if any(target.get(key) is not None and
+               (type(target[key]) is not int or target[key] != getattr(leaf, key))
+               for key in ("start_line", "end_line")):
+            return None
+        proof = {"kind": "exact_retained_primary_leaf" if role == "primary_target" else "exact_retained_test_leaf",
+                 "chunk_id": leaf.chunk_id, "file_path": leaf.file_path,
+                 "qualified_symbol": leaf.qualified_name, "start_line": leaf.start_line,
+                 "end_line": leaf.end_line, "content_sha256": hashlib.sha256(leaf.content.encode()).hexdigest(),
+                 "target_role": role}
+        if role == "primary_target":
+            if ("retrieval_evidence" not in target.get("evidence_types", [])
+                    or target.get("start_line") != leaf.start_line or target.get("end_line") != leaf.end_line
+                    or not any(row.get("file_path") == leaf.file_path and row.get("symbol") == leaf.qualified_name
+                               and row.get("start_line") == leaf.start_line and row.get("end_line") == leaf.end_line
+                               for row in impact["retrieval"].get("query_evidence", []))):
+                return None
+        else:
+            identity = ".".join((*PurePosixPath(leaf.file_path).with_suffix("").parts, leaf.qualified_name))
+            binding = [row for row in expected.get("evidence", []) if row.get("test") == identity]
+            if (identity not in known or expected.get("status") != "known"
+                    or identity not in expected.get("selected_tests", []) or len(binding) != 1
+                    or binding[0].get("source") not in _EXACT_TEST_BINDING_SOURCES
+                    or leaf.file_path not in binding[0].get("target_paths", [])):
+                return None
+            proof.update(test_identity=identity, expected_test_binding_source=binding[0]["source"])
+        proofs.append(proof)
+    kinds = {proof["kind"] for proof in proofs}
+    return {"kind": next(iter(kinds)) if len(kinds) == 1 else "exact_retained_leaf_evidence",
+            "container": {"chunk_id": container.chunk_id, "file_path": container.file_path,
+                          "qualified_symbol": container.qualified_name, "entity_type": container.entity_type,
+                          "start_line": container.start_line, "end_line": container.end_line,
+                          "content_sha256": hashlib.sha256(container.content.encode()).hexdigest()},
+            "proofs": sorted(proofs, key=lambda row: (row["file_path"], row["qualified_symbol"]))}
+
+
 def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
                 expected_tests: dict[str, Any], repository: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
@@ -614,11 +684,11 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
     relevant_exclusions = [item for item in exclusions if item.get("file_path") in relevant_paths]
     warnings = []
     for item in relevant_exclusions:
-        basis = _container_exclusion_basis(item, impact, targets, repository)
+        basis = _container_exclusion_basis(item, impact, targets, repository, expected_tests)
         if basis:
             warnings.append({"type": "token_limit_exclusion", "evidence": item,
                              "classification": "non_blocking", "basis": basis,
-                             "action": "Container excluded from embedding; exact retained descendants independently establish supporting relationships."})
+                             "action": "Container excluded from embedding; exact retained descendants independently establish required evidence without authorizing the parent."})
         else:
             rows.append({"type": "token_limit_exclusion", "evidence": item,
                          "classification": "blocking", "basis": None,
