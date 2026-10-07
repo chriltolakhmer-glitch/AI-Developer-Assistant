@@ -2,6 +2,8 @@
 
 from contextlib import redirect_stderr, redirect_stdout
 import difflib
+import copy
+import hashlib
 from io import StringIO
 import json
 from pathlib import Path
@@ -31,6 +33,120 @@ class _Model:
 
 
 class ImplementationPlanningTests(unittest.TestCase):
+    def container_evidence(self):
+        from src.developer.local_workflow import parse_local_repository
+        parsed = parse_local_repository(self.repository)
+        chunks = {(c.file_path, c.qualified_name): c for c in parsed.chunks}
+        container = chunks['src/app.py', 'src.app']
+        retained = [chunks['src/app.py', 'run'], chunks['src/helpers.py', 'validate']]
+        item = dict(chunk_id=container.chunk_id, file_path=container.file_path,
+                    qualified_name=container.qualified_name, start_line=container.start_line,
+                    end_line=container.end_line, reason='over_limit', token_count=300)
+        impact = dict(repository={'working_tree_sha256': parsed.inventory.snapshot_id},
+                      index_freshness={'status': 'current'},
+                      changes={'files': [], 'token_limit_exclusions': [item]},
+                      retrieval={'context_diagnostics': {'included_context': [
+                          dict(file_path=c.file_path, symbol_name=c.qualified_name,
+                               content_sha256=hashlib.sha256(c.content.encode()).hexdigest())
+                          for c in retained]}})
+        targets = [dict(file_path='src/helpers.py', qualified_symbol='validate', role='primary_target', start_line=1),
+                   dict(file_path='src/app.py', qualified_symbol='run', role='related_context', start_line=None)]
+        return item, impact, targets, chunks
+
+    def test_oversized_supporting_container_requires_exact_retained_relationship(self):
+        from src.developer.implementation_planning import _container_exclusion_basis
+        item, impact, targets, _ = self.container_evidence()
+        basis = _container_exclusion_basis(item, impact, targets, self.repository)
+        self.assertEqual('retained_descendant_evidence', basis['kind'])
+        self.assertEqual('src/app.py', basis['proofs'][0]['file_path'])
+        self.assertEqual('validate', basis['proofs'][0]['relationship']['symbol'])
+
+    def test_oversized_leaf_remains_blocking(self):
+        from src.developer.implementation_planning import _container_exclusion_basis
+        item, impact, targets, chunks = self.container_evidence()
+        leaf = chunks['src/app.py', 'run']
+        item.update(chunk_id=leaf.chunk_id, qualified_name=leaf.qualified_name,
+                    start_line=leaf.start_line, end_line=leaf.end_line)
+        self.assertIsNone(_container_exclusion_basis(item, impact, targets, self.repository))
+
+    def test_container_proof_rejects_wrong_file_hash_relationship_and_primary_scope(self):
+        from src.developer.implementation_planning import _container_exclusion_basis
+        item, impact, targets, _ = self.container_evidence()
+        variants = []
+        for field, value in [('file_path', 'src/other.py'), ('content_sha256', '0' * 64),
+                             ('symbol_name', 'unrelated')]:
+            variant = copy.deepcopy(impact)
+            variant['retrieval']['context_diagnostics']['included_context'][0][field] = value
+            variants.append((variant, targets))
+        unrelated = copy.deepcopy(targets)
+        unrelated[0]['qualified_symbol'] = 'require_rate'
+        variants.append((impact, unrelated))
+        primary = copy.deepcopy(targets)
+        primary[1]['role'] = 'primary_target'
+        variants.append((impact, primary))
+        tests_only = copy.deepcopy(impact)
+        tests_only['retrieval']['context_diagnostics']['included_context'] = []
+        tests_only['tests'] = {'selected_tests': ['tests.test_app.AppTests.test_run']}
+        variants.append((tests_only, targets))
+        for variant, scope in variants:
+            with self.subTest(variant=variant, scope=scope):
+                self.assertIsNone(_container_exclusion_basis(item, variant, scope, self.repository))
+
+    def test_unrelated_token_exclusion_is_summary_only(self):
+        from src.developer.implementation_planning import _unresolved
+        item, impact, targets, _ = self.container_evidence()
+        impact['changes'].update(unsupported_changed_files=[], parser_failures=[])
+        impact['unresolved_relationships'] = []
+        targets = targets[:1]
+        rows, warnings = _unresolved(impact, targets, {'selected_tests': [], 'evidence': []}, self.repository)
+        self.assertTrue(any(row['type'] == 'token_limit_exclusion_summary' for row in rows))
+        self.assertFalse(any(row['type'] == 'token_limit_exclusion' for row in rows + warnings))
+
+    def test_container_plan_is_authoritative_and_draft_validates_but_leaf_blocks(self):
+        from src.developer.local_workflow import parse_local_repository
+        from src.developer.patch_drafting import draft_patch, SuppliedPatchGenerator
+        app = self.repository / 'src/app.py'
+        app.write_text('# ' + 'context ' * 300 + '\n' + app.read_text(), encoding='utf-8')
+        self.git('add', 'src/app.py')
+        self.git('commit', '--quiet', '-m', 'oversized supporting module')
+        self.index()
+        parsed = parse_local_repository(self.repository)
+        chunks = {(c.file_path, c.qualified_name): c for c in parsed.chunks}
+        primary = chunks['src/helpers.py', 'validate']
+        child = chunks['src/app.py', 'run']
+        query = self.query_payload('Fix validate error handling')
+        query['results'] = [{'file_path': primary.file_path, 'qualified_name': primary.qualified_name,
+                            'start_line': primary.start_line, 'end_line': primary.end_line, 'rank': 1,
+                            'chunk_id': primary.chunk_id, 'related_context': [
+                                {'file_path': child.file_path, 'symbol_name': child.qualified_name,
+                                 'reason': 'caller_relationship'}]}]
+        query['context']['included_context'] = [
+            {'file_path': c.file_path, 'symbol_name': c.qualified_name,
+             'content_sha256': hashlib.sha256(c.content.encode()).hexdigest()} for c in (primary, child)]
+        report = self.plan(goal='Fix validate error handling', query=query)
+        self.assertEqual('completed', report['status'])
+        warning = next(row for row in report['warnings'] if row['type'] == 'token_limit_exclusion')
+        self.assertEqual('non_blocking', warning['classification'])
+        source = (self.repository / primary.file_path).read_text()
+        candidate = source.replace("'missing'", "'missing value'")
+        patch_file = self.root / 'candidate.diff'
+        patch_file.write_text(''.join(difflib.unified_diff(source.splitlines(True), candidate.splitlines(True),
+                              fromfile='a/src/helpers.py', tofile='b/src/helpers.py')), encoding='utf-8')
+        draft = draft_patch(self.developer, self.repository, report['proposed_action'],
+                            SuppliedPatchGenerator(patch_file.read_text()), plan_run_id=report['run_id'])
+        self.assertEqual('draft', draft['status'])
+        helper = self.repository / primary.file_path
+        helper.write_text(source.replace("raise ValueError('missing')", "raise ValueError('" + 'missing ' * 300 + "')"), encoding='utf-8')
+        self.git('add', 'src/helpers.py')
+        self.git('commit', '--quiet', '-m', 'oversized required leaf')
+        self.index()
+        blocked = self.plan(goal='Fix validate error handling', query=query)
+        self.assertEqual('limited', blocked['status'])
+        self.assertTrue(any(row['type'] == 'token_limit_exclusion' for row in blocked['unresolved_evidence']))
+        with self.assertRaises(LocalWorkflowError):
+            draft_patch(self.developer, self.repository, blocked['proposed_action'],
+                        SuppliedPatchGenerator(patch_file.read_text()), plan_run_id=blocked['run_id'])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

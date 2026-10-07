@@ -523,6 +523,79 @@ def _validation(impact: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _container_exclusion_basis(item: dict[str, Any], impact: dict[str, Any],
+                               targets: list[dict[str, Any]], repository: Path) -> dict[str, Any] | None:
+    """Prove supporting container evidence from exact retained parsed descendants.
+
+    Primary/changed containers and leaf bodies still require their own evidence.
+    Same-file presence, selected tests, and supplied relationship labels alone
+    cannot establish this proof.
+    """
+    from .local_workflow import parse_local_repository
+
+    if impact["index_freshness"].get("status") != "current":
+        return None
+    parsed = parse_local_repository(repository)
+    if (parsed.inventory.snapshot_id != impact["repository"].get("working_tree_sha256")
+            or parsed.parse_failures):
+        return None
+    container = next((chunk for chunk in parsed.chunks
+                      if chunk.chunk_id == item.get("chunk_id")
+                      and chunk.file_path == item.get("file_path")
+                      and chunk.qualified_name == item.get("qualified_name")
+                      and chunk.start_line == item.get("start_line")
+                      and chunk.end_line == item.get("end_line")), None)
+    if container is None or container.entity_type not in {"module", "class"}:
+        return None
+    affected = [row for row in targets if row["file_path"] == container.file_path
+                and (row.get("qualified_symbol") == container.qualified_name
+                     or (row.get("start_line") is not None
+                         and container.start_line <= row["start_line"] <= container.end_line))]
+    # Retrieval-expanded targets often lack ranges; include every same-file row
+    # conservatively, rather than declaring an unproven sibling irrelevant.
+    affected.extend(row for row in targets if row["file_path"] == container.file_path
+                    and row not in affected and row.get("start_line") is None)
+    if not affected or any(row["role"] != "related_context" for row in affected):
+        return None
+    if any(row["path"] == container.file_path for row in impact["changes"]["files"]):
+        return None
+    excluded = {row["chunk_id"] for row in impact["changes"]["token_limit_exclusions"]}
+    included = impact["retrieval"].get("context_diagnostics", {}).get("included_context", [])
+    retained = {chunk.chunk_id: chunk for chunk in parsed.chunks if chunk.chunk_id not in excluded
+                and any(row.get("file_path") == chunk.file_path
+                        and row.get("symbol_name") == chunk.qualified_name
+                        and row.get("content_sha256") == hashlib.sha256(chunk.content.encode()).hexdigest()
+                        for row in included)}
+    anchors = {(row["file_path"], row["qualified_symbol"]) for row in targets
+               if row["role"] == "primary_target"
+               and any(chunk.file_path == row["file_path"]
+                       and chunk.qualified_name == row["qualified_symbol"]
+                       for chunk in retained.values())}
+    descendants = [chunk for chunk in retained.values()
+                   if chunk.file_path == container.file_path and chunk.chunk_id != container.chunk_id
+                   and container.start_line <= chunk.start_line <= chunk.end_line <= container.end_line
+                   and (container.entity_type == "module"
+                        or chunk.qualified_name.startswith(container.qualified_name + "."))]
+    proofs = []
+    for target in affected:
+        candidates = descendants if target["qualified_symbol"] == container.qualified_name else [
+            chunk for chunk in descendants if chunk.qualified_name == target["qualified_symbol"]]
+        matches = [(chunk, edge) for chunk in candidates
+                   for edge in parsed.context[chunk.chunk_id].get("relationship_edges", [])
+                   if edge.get("kind") in {"call_relationship", "import_relationship"}
+                   and (edge.get("file_path"), edge.get("symbol")) in anchors]
+        if not matches:
+            return None
+        for chunk, edge in matches:
+            proofs.append({"chunk_id": chunk.chunk_id, "file_path": chunk.file_path,
+                           "qualified_symbol": chunk.qualified_name,
+                           "content_sha256": hashlib.sha256(chunk.content.encode()).hexdigest(),
+                           "relationship": edge})
+    return {"kind": "retained_descendant_evidence", "relationship_basis": "independent_static_relationship",
+            "container": {"file_path": container.file_path, "qualified_symbol": container.qualified_name},
+            "proofs": proofs}
+
+
 def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
                 expected_tests: dict[str, Any], repository: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
@@ -539,9 +612,17 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
     relevant_paths.update(row["path"] for row in impact["changes"]["files"])
     exclusions = impact["changes"]["token_limit_exclusions"]
     relevant_exclusions = [item for item in exclusions if item.get("file_path") in relevant_paths]
+    warnings = []
     for item in relevant_exclusions:
-        rows.append({"type": "token_limit_exclusion", "evidence": item,
-                     "action": "Inspect the excluded source directly; it was not valid retrieval evidence."})
+        basis = _container_exclusion_basis(item, impact, targets, repository)
+        if basis:
+            warnings.append({"type": "token_limit_exclusion", "evidence": item,
+                             "classification": "non_blocking", "basis": basis,
+                             "action": "Container excluded from embedding; exact retained descendants independently establish supporting relationships."})
+        else:
+            rows.append({"type": "token_limit_exclusion", "evidence": item,
+                         "classification": "blocking", "basis": None,
+                         "action": "Required evidence is not independently established by retained source evidence."})
     unrelated_exclusions = exclusions[len(relevant_exclusions):] if not relevant_exclusions else [
         item for item in exclusions if item not in relevant_exclusions
     ]
@@ -558,7 +639,6 @@ def _unresolved(impact: dict[str, Any], targets: list[dict[str, Any]],
     for item in context.get("relationship_diagnostics", []):
         rows.append({"type": "retrieval_relationship_diagnostic", "evidence": item,
                      "action": "Review this unresolved retrieval relationship manually."})
-    warnings = []
     test_evidence = {row.get("test"): row for row in expected_tests.get("evidence", [])
                      if isinstance(row, dict)}
     selected_tests = set(expected_tests.get("selected_tests", []))
