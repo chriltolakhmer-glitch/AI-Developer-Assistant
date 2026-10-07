@@ -14,6 +14,8 @@ This Master's thesis project builds and validates a working benchmark/retrieval 
 
 ## Current Phase
 
+**Post-roadmap product direction (2026-10-08): UI first.** The developer roadmap through Phase 72 is complete; future product work is tracked separately in the [post-roadmap product development plan](docs/post-roadmap-product-plan.md). UI v1 will expose existing trusted capabilities before feature-specific test planning, implementation/test drafting, and supervised orchestration. This is planning only; no Phase 73 is created. The Phase 65 summary below records the earlier main-branch integration baseline.
+
 **Main development through Phase 65 — evidence-grounded implementation planning.** The immutable v0.1.1 tag remains the research-prototype release baseline. The moving `main` branch separately integrates developer-mode work through Phase 65; none of that work changes or becomes part of v0.1.1.
 
 | Area | Status |

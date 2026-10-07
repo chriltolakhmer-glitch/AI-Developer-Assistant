@@ -2,6 +2,10 @@
 
 This workflow is for routine software maintenance only. It does not authorize source processing, corpus expansion, new benchmark questions, retrieval changes, or evaluation-method changes.
 
+## Post-roadmap product priorities
+
+The completed Phase 65–72 workflow remains the implementation foundation. The [post-roadmap product development plan](docs/post-roadmap-product-plan.md) is the reference for future developer-experience and productivity work: UI v1 first, validate the existing workflow through that UI, then feature-specific test planning, evidence-grounded implementation/test drafting, and supervised orchestration. These are product enhancements, not Phase 73+ or a replacement architecture. The plan records direction only and does not authorize implementation or weaken explicit human approval.
+
 ## 1. Prepare an isolated environment
 
 From the project root in Windows PowerShell (Python 3.14 is the tested runtime; Python 3.11+ is required):
