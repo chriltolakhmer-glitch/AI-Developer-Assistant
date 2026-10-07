@@ -104,6 +104,68 @@ def _read_run(workspace: DeveloperWorkspace, run_id: str, kind: str) -> tuple[di
         raise LocalWorkflowError(f"Phase 71 {kind} evidence is missing, malformed, or tampered.") from error
 
 
+def _valid_phase65_informational_warning(item: Any, plan: dict[str, Any]) -> bool:
+    """Validate recorded informational proof against historical Phase 65 evidence.
+
+    Do not consult the legitimately changed post-application source snapshot.
+    """
+    if not isinstance(item, dict) or item.get("classification") != "non_blocking":
+        return False
+    evidence, basis = item.get("evidence"), item.get("basis")
+    if not isinstance(evidence, dict) or not evidence or not isinstance(basis, dict) or not basis:
+        return False
+    if item.get("type") == "retrieval_omission":
+        return True  # Preserve the existing retrieval-omission proof contract.
+    if item.get("type") != "token_limit_exclusion":
+        return False
+    try:
+        impact = plan["change_impact"]
+        exclusions = impact["changes"]["token_limit_exclusions"]
+        context = impact["retrieval"]["context_diagnostics"]
+        container = basis["container"]
+        if (evidence not in exclusions or evidence.get("reason") != "over_limit"
+                or basis.get("kind") != "retained_descendant_evidence"
+                or basis.get("relationship_basis") != "independent_static_relationship"
+                or container != {"file_path": evidence["file_path"],
+                                 "qualified_symbol": evidence["qualified_name"]}):
+            return False
+        proofs = basis.get("proofs")
+        if not isinstance(proofs, list) or not proofs:
+            return False
+        primary = {(row["file_path"], row["qualified_symbol"]) for row in plan["implementation_targets"]
+                   if row.get("role") == "primary_target"}
+        retained_ids = {identity for row in context.get("expansion_decisions", [])
+                        for identity in row.get("related_chunk_ids", [])}
+        excluded_ids = {row["chunk_id"] for row in exclusions}
+        included = context["included_context"]
+        for proof in proofs:
+            if not isinstance(proof, dict):
+                return False
+            path, symbol, digest = proof["file_path"], proof["qualified_symbol"], proof["content_sha256"]
+            if (not isinstance(symbol, str) or not symbol
+                    or not re.fullmatch(r"[0-9a-f]{64}", proof["chunk_id"])
+                    or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    or proof["chunk_id"] not in retained_ids or proof["chunk_id"] in excluded_ids
+                    or path != container["file_path"] or symbol == container["qualified_symbol"]
+                    or not any(row.get("file_path") == path and row.get("symbol_name") == symbol
+                               and row.get("content_sha256") == digest for row in included)):
+                return False
+            edge = proof["relationship"]
+            if not isinstance(edge, dict) or edge.get("kind") not in {"call_relationship", "import_relationship"}:
+                return False
+            destination = (edge.get("file_path"), edge.get("symbol"))
+            inverse = "caller_relationship" if edge["kind"] == "call_relationship" else "importer_relationship"
+            if destination not in primary or not any(
+                    (row.get("file_path"), row.get("symbol")) == destination
+                    and any(ref == {"file_path": path, "symbol": symbol, "kind": inverse}
+                            for ref in row.get("developer_context", {}).get("relationship_references", []))
+                    for row in impact["retrieval"]["query_evidence"]):
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
 def _proposal(value: dict[str, Any]) -> ProposedAction:
     try:
         content = dict(value)
@@ -266,14 +328,16 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         if unresolved_rows and not blocking_rows:
             warnings.append("phase65_static_plan_retains_runtime_behavior_uncertainty_outside_executed_test_scope")
         for item in plan.get("warnings", []):
-            if (not isinstance(item, dict) or item.get("type") != "retrieval_omission"
-                    or item.get("classification") != "non_blocking" or not item.get("basis")):
+            if not _valid_phase65_informational_warning(item, plan):
                 uncertainty.append("phase65_informational_evidence_classification_invalid")
                 continue
             evidence = item.get("evidence", {})
-            warnings.append("phase65_retrieval_context_omitted_but_independently_grounded:"
+            prefix = ("phase65_token_limit_container_independently_grounded:"
+                      if item["type"] == "token_limit_exclusion" else
+                      "phase65_retrieval_context_omitted_but_independently_grounded:")
+            warnings.append(prefix
                             + str(evidence.get("file_path", "unknown")) + ":"
-                            + str(evidence.get("symbol_name", "unknown")))
+                            + str(evidence.get("symbol_name", evidence.get("qualified_name", "unknown"))))
         expected_proposal = ProposedAction.from_plan(
             plan.get("change_impact", {}), plan.get("implementation_targets", []),
             plan.get("goal", ""), plan.get("unresolved_evidence", []))

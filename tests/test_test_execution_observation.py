@@ -2,11 +2,13 @@
 from pathlib import Path
 import json
 import hashlib
+import copy
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
+from unittest.mock import patch
 from src.developer.local_workflow import (DeveloperWorkspace, LocalWorkflowError,
                                           _git_index_state, scan_local_repository)
 from src.developer.patch_application import apply_approved_patch
@@ -71,7 +73,7 @@ class TestExecutionObservationTests(unittest.TestCase):
                      "        subprocess.run(['git', 'status', '--porcelain'], check=True, capture_output=True)"]
         (self.repo / "tests" / "test_app.py").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
-    def _record_phase65_plan(self, inventory, *, uncertain=False, warnings=()):
+    def _record_phase65_plan(self, inventory, *, uncertain=False, warnings=(), impact_evidence=None):
         targets = [{"file_path": "app.py", "qualified_symbol": "value", "role": "primary_target",
                     "evidence_types": ["changed_code"], "reasons": ["fixture evidence"],
                     "current_index_evidence": False}]
@@ -80,6 +82,8 @@ class TestExecutionObservationTests(unittest.TestCase):
                       "current_commit": inventory.commit_sha, "working_tree_sha256": inventory.snapshot_id}
         impact = {"repository": repository, "index_freshness": {"working_tree_sha256": inventory.snapshot_id},
                   "retrieval": {"query_evidence": []}}
+        if impact_evidence:
+            impact.update(impact_evidence)
         exact_test = "tests.test_app.AppTests.test_value"
         proposal = ProposedAction.from_plan(impact, targets, "Change value function", [])
         tests = {"selected_tests": [exact_test], "selectors": ["tests.test_app"], "uncertain": uncertain,
@@ -213,6 +217,67 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.assertEqual("verified", result["status"], result["deviations"])
         self.assertIn("phase65_retrieval_context_omitted_but_independently_grounded:tests/test_app.py:AppTests.test_value",
                       result["warnings"])
+
+    def test_phase71_accepts_historical_container_proof_and_rejects_malformed_variants(self):
+        from src.developer.local_workflow import parse_local_repository
+        from src.developer import execution_verification as verification
+        self.git('checkout', '--', 'app.py')
+        (self.repo / 'support.py').write_text('# ' + 'context ' * 300 + '\nfrom app import value\n\ndef caller():\n    return value()\n')
+        self.git('add', 'support.py')
+        self.git('commit', '--quiet', '-m', 'supporting container')
+        parsed = parse_local_repository(self.repo)
+        chunks = {(c.file_path, c.qualified_name): c for c in parsed.chunks}
+        container, child, anchor = chunks['support.py', 'support'], chunks['support.py', 'caller'], chunks['app.py', 'value']
+        exclusion = {'chunk_id': container.chunk_id, 'file_path': 'support.py', 'qualified_name': 'support',
+                     'start_line': container.start_line, 'end_line': container.end_line, 'reason': 'over_limit',
+                     'token_count': 300}
+        edge = {'file_path': 'app.py', 'symbol': 'value', 'kind': 'call_relationship'}
+        warning = {'type': 'token_limit_exclusion', 'classification': 'non_blocking', 'evidence': exclusion,
+                   'basis': {'kind': 'retained_descendant_evidence', 'relationship_basis': 'independent_static_relationship',
+                             'container': {'file_path': 'support.py', 'qualified_symbol': 'support'},
+                             'proofs': [{'chunk_id': child.chunk_id, 'file_path': 'support.py', 'qualified_symbol': 'caller',
+                                         'content_sha256': hashlib.sha256(child.content.encode()).hexdigest(), 'relationship': edge}]}}
+        impact = {'changes': {'token_limit_exclusions': [exclusion]},
+                  'retrieval': {'context_diagnostics': {'included_context': [
+                      {'file_path': 'support.py', 'symbol_name': 'caller', 'content_sha256': hashlib.sha256(child.content.encode()).hexdigest()}],
+                      'expansion_decisions': [{'related_chunk_ids': [child.chunk_id]}]},
+                      'query_evidence': [{'file_path': 'app.py', 'symbol': 'value',
+                                         'developer_context': {'relationship_references': [
+                                             {'file_path': 'support.py', 'symbol': 'caller', 'kind': 'caller_relationship'}]}}]}}
+        self.workspace = DeveloperWorkspace(self.workspace.root.parent / 'workspace-container')
+        self.plan_run_id = self._record_phase65_plan(parsed.inventory, warnings=(warning,), impact_evidence=impact)
+        draft = draft_patch(self.workspace, self.repo, self.proposal, SuppliedPatchGenerator(self.patch_text))
+        approval = record_patch_decision(self.workspace, self.repo, draft['run_id'], 'approve')
+        self.applied = apply_approved_patch(self.workspace, self.repo, approval['run_id'])
+        observation = self.run_tests('tests.test_app.AppTests.test_value')
+        result = verify_execution(self.workspace, self.repo, self.applied['run_id'], observation['run_id'])
+        self.assertEqual('verified', result['status'], result)
+        edits = [lambda w: w.update(type='unknown'), lambda w: w.update(classification='blocking'),
+                 lambda w: w.pop('basis'), lambda w: w['basis'].update(kind='manual_review'),
+                 lambda w: w['basis'].update(relationship_basis='unproven'),
+                 lambda w: w['basis']['container'].update(file_path='other.py'),
+                 lambda w: w['evidence'].update(chunk_id='0'*64),
+                 lambda w: w['basis'].update(proofs=[]),
+                 lambda w: w['basis']['proofs'][0].update(content_sha256='0'*64),
+                 lambda w: w['basis']['proofs'][0].update(qualified_symbol='unrelated'),
+                 lambda w: w['basis']['proofs'][0].update(file_path='other.py'),
+                 lambda w: w['basis']['proofs'][0]['relationship'].update(kind='nearby'),
+                 lambda w: w['basis']['proofs'][0]['relationship'].update(symbol='other'),
+                 lambda w: w['basis']['proofs'][0].update(chunk_id='0'*64)]
+        original_reader = verification._read_run
+        for number, edit in enumerate(edits):
+            malformed = copy.deepcopy(warning)
+            edit(malformed)
+            def read_with_warning(workspace, run_id, phase):
+                metadata, record = original_reader(workspace, run_id, phase)
+                if phase == 'plan':
+                    record = copy.deepcopy(record)
+                    record['warnings'] = [malformed]
+                return metadata, record
+            with self.subTest(case=number), patch.object(verification, '_read_run', side_effect=read_with_warning):
+                rejected = verify_execution(self.workspace, self.repo, self.applied['run_id'], observation['run_id'])
+                self.assertEqual('uncertain', rejected['status'], rejected)
+                self.assertIn('phase65_informational_evidence_classification_invalid', rejected['unresolved_uncertainty'])
 
     def test_phase71_blocks_failed_tests_and_phase70_side_effects(self):
         self._reapply_with_test_mode("fail")
