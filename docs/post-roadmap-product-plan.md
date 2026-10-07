@@ -21,7 +21,7 @@ Build AIDA UI v1 before implementing the next developer-productivity enhancement
 
 AIDA is already strong in evidence-grounded repository understanding, exact path/symbol scope control, human authorization, controlled mutation, deterministic regression binding, execution verification, fail-closed behavior, and auditability. Current usage is command-heavy and exposes internal phase coordination. The external project exercise required manual scan/index, planning, candidate generation, Phase 67 invocation, Phase 68 approval, Phase 69 application, Phase 70 execution, Phase 71 verification, Phase 72 evaluation, and direct feature validation.
 
-The UI is a presentation and orchestration layer over the existing trusted workflow. Existing safety contracts, evidence records, human approval, exact scope controls, execution verification, and fail-closed semantics remain authoritative.
+The UI is a presentation and control layer over the existing trusted workflow. Existing safety contracts, evidence records, human approval, exact scope controls, execution verification, and fail-closed semantics remain authoritative.
 
 The long-term vision is:
 
@@ -87,7 +87,7 @@ Expose scan IDs, index IDs, Phase 65 run/proposal, Phase 67 run/patch, Phase 68 
 4. Enter developer goal.
 5. Run Phase 65 planning.
 6. Review evidence and plan.
-7. Supply/generate a candidate through a currently supported mechanism.
+7. Supply/import a candidate patch; AIDA UI v1 does not generate implementation patches.
 8. Run Phase 67 with the existing required proposal contracts.
 9. Review exact patch.
 10. Explicitly approve or reject through Phase 68.
@@ -137,3 +137,5 @@ Retain internal phases for safety and auditability. Never collapse or bypass the
 Do not start item 3 before UI v1 is complete unless a UI implementation dependency requires a small supporting backend change. Such a dependency must preserve the existing safety contracts and does not authorize the broader enhancement early.
 
 UI v1 completion requires a usable existing workflow with explicit approval, visible blockers/failures/uncertainty, authoritative evidence bindings, and inspectable history. Validate it through the existing developer workflow before proceeding to productivity enhancements. This planning update performs no implementation, execution, tests, scan/index, or new phase creation.
+
+Implementation design: [AIDA UI v1 architecture](ui-v1-architecture.md).
