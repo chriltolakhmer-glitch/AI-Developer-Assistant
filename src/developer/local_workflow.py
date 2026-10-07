@@ -340,7 +340,8 @@ class DeveloperWorkspace:
         self.root = Path(root).expanduser().resolve(strict=False)
         self.research_roots = tuple(Path(item).expanduser().resolve(strict=False) for item in research_roots)
 
-    def _prepare(self, repository: Path | None = None) -> None:
+    def _validate_isolation(self, repository: Path | None = None) -> None:
+        """Check existing storage boundaries without initializing the workspace."""
         if _overlaps(self.root, _PROJECT_ROOT):
             raise LocalWorkflowError(
                 f"Developer workspace '{self.root}' must be outside the prototype checkout '{_PROJECT_ROOT}'. "
@@ -350,6 +351,9 @@ class DeveloperWorkspace:
         if repository is not None:
             self._assert_isolated(self.root, (repository,), "Developer workspace")
             self._assert_isolated(repository, self.research_roots, "Repository")
+
+    def _prepare(self, repository: Path | None = None) -> None:
+        self._validate_isolation(repository)
         try:
             if self.root.exists() and not self.root.is_dir():
                 raise LocalWorkflowError(f"Developer workspace is not a directory: '{self.root}'. Choose --workspace PATH.")
