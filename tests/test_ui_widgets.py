@@ -11,7 +11,7 @@ except ImportError:
 
 from src.config import load_config
 from src.ui.service import RepositoryService
-from ui_fixture import GitFixture
+from tests.ui_fixture import GitFixture
 
 
 class UIWidgetTests(GitFixture):
@@ -52,7 +52,7 @@ class UIWidgetTests(GitFixture):
         tabs = self.app.view.notebook.tabs()
         self.assertEqual(["Project", "Plan & Review", "Run & Result", "History"],
                          [self.app.view.notebook.tab(tab, "text") for tab in tabs])
-        for tab in tabs[1:]:
+        for tab in tabs[2:]:
             children = self.window.nametowidget(tab).winfo_children()
             self.assertEqual(["TLabel"], [child.winfo_class() for child in children])
         before = self.snapshot()

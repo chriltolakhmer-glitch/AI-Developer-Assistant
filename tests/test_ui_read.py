@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from src.developer.local_workflow import DeveloperWorkspace, LocalWorkflowError
 from src.developer.ui_read import read_repository
-from ui_fixture import GitFixture
+from tests.ui_fixture import GitFixture
 
 
 class UIReadTests(GitFixture):

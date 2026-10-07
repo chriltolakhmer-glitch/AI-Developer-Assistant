@@ -8,7 +8,7 @@ from src.config import load_config
 from src.developer.local_workflow import LocalWorkflowError
 from src.ui.__main__ import main
 from src.ui.service import RepositoryService
-from ui_fixture import GitFixture
+from tests.ui_fixture import GitFixture
 
 
 class UIServiceTests(GitFixture):
@@ -31,12 +31,12 @@ class UIServiceTests(GitFixture):
                          developer.research_roots)
         self.assertFalse(self.workspace_path.exists())
 
-    def test_errors_propagate_and_only_read_operation_exists(self):
+    def test_errors_propagate_and_only_slice_operations_exist(self):
         service = RepositoryService(self.config())
         with patch("src.developer.ui_read.read_repository", side_effect=LocalWorkflowError("exact reason")):
             with self.assertRaisesRegex(LocalWorkflowError, "exact reason"):
                 service.read_repository(str(self.repo), str(self.workspace_path))
-        self.assertEqual(["read_repository"], [name for name, value in RepositoryService.__dict__.items()
+        self.assertEqual(["read_repository", "scan", "index", "catalog_tests", "plan"], [name for name, value in RepositoryService.__dict__.items()
                                               if not name.startswith("_") and callable(value)])
 
     def test_service_open_and_refresh_do_not_write(self):

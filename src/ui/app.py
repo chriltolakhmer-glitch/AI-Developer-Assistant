@@ -1,4 +1,4 @@
-"""Tk main-loop controller and one read worker; no lifecycle execution."""
+"""Tk main-loop controller and one worker for explicit Slice 2 operations."""
 
 from pathlib import Path
 from queue import Empty, Queue
@@ -20,23 +20,44 @@ class Application:
         root.title("AIDA — Repository status")
         root.geometry("980x620")
         root.minsize(780, 540)
-        self.view = ShellView(root, self.open_repository, self.browse_repository, self.browse_workspace)
+        self.view = ShellView(root, self.open_repository, self.browse_repository, self.browse_workspace,
+                              self.start_operation, self.inputs_changed)
         self.view.render(self.state)
         root.protocol("WM_DELETE_WINDOW", self.request_close)
         self.poll_id = root.after(40, self._poll)
 
     def open_repository(self):
+        self.start_operation("read_repository")
+
+    def inputs_changed(self):
+        if self.view.rendering:
+            return
+        repository, workspace = self.view.repository.get(), self.view.workspace.get()
+        same_session = (repository, workspace) == (self.state.repository, self.state.workspace)
+        self.state.select(repository, workspace)
+        self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"),
+                                   self.view.selected_test_ids() if same_session else ())
+        self.view.render(self.state)
+
+    def start_operation(self, operation: str):
         if self.closed or (self.worker is not None and self.worker.is_alive()):
             return
-        request = self.state.begin(self.view.repository.get(), self.view.workspace.get())
+        self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"), self.view.selected_test_ids())
+        request = self.state.begin_operation(operation, self.view.repository.get(), self.view.workspace.get())
         self.view.render(self.state)
         if request is not None:
-            self.worker = Thread(target=self._read, args=(request,), name="aida-repository-read", daemon=False)
+            self.worker = Thread(target=self._read, args=(request,), name="aida-ui-operation", daemon=False)
             self.worker.start()
 
     def _read(self, request: ReadRequest):
         try:
-            facts = self.service.read_repository(request.repository, request.workspace)
+            if request.operation == "plan":
+                facts = self.service.plan(request.repository, request.workspace, goal=request.goal,
+                                          top_k=request.top_k, expected_tests=request.expected_tests)
+            else:
+                operation = {"read_repository": self.service.read_repository, "scan": self.service.scan,
+                             "index": self.service.index, "catalog_tests": self.service.catalog_tests}[request.operation]
+                facts = operation(request.repository, request.workspace)
             result = (request, facts, None)
         except BaseException as error:
             # Deliver unexpected worker termination too, so pending close can finish.
@@ -54,6 +75,7 @@ class Application:
                 self.view.render(self.state)
             except (KeyError, TypeError, ValueError) as failure:
                 self.state.facts = None
+                self.state.plan_result = self.state.scan_result = self.state.index_result = self.state.test_catalog = None
                 self.state.error = f"Cannot display repository result: {failure}"
                 self.view.render(self.state)
         if self.state.close_pending and not self.state.loading and not (self.worker and self.worker.is_alive()):
