@@ -145,6 +145,55 @@ class TestExecutionObservationTests(unittest.TestCase):
         self.assertEqual(index, _git_index_state(self.repo))
         self.assertEqual(target, (self.repo / "app.py").read_bytes())
 
+    def _apply_equivalent_serialization_fixture(self):
+        self.git("checkout", "--", "app.py")
+        (self.repo / "app.py").write_bytes(b'def value():\n    """Old documentation."""\n    return 0\n')
+        self.git("add", "app.py")
+        self.git("commit", "--quiet", "-m", "signature and docstring baseline")
+        self.workspace = DeveloperWorkspace(self.workspace.root.parent / "equivalent-workspace")
+        self.plan_run_id = self._record_phase65_plan(scan_local_repository(self.repo))
+        self.patch_text = ('--- a/app.py\n+++ b/app.py\n@@ -1,3 +1,3 @@\n'
+                           '-def value():\n+def value(optional=0):\n'
+                           '-    """Old documentation."""\n+    """New documentation."""\n'
+                           '-    return 0\n+    return 2 + optional\n')
+        draft = draft_patch(self.workspace, self.repo, self.proposal, SuppliedPatchGenerator(self.patch_text))
+        approval = record_patch_decision(self.workspace, self.repo, draft["run_id"], "approve")
+        self.applied = apply_approved_patch(self.workspace, self.repo, approval["run_id"])
+
+    def test_equivalent_diff_serialization_verifies_exact_postimage(self):
+        self._apply_equivalent_serialization_fixture()
+        # The old ordered hunk comparison rejected this valid exact application.
+        supplied = tuple(row for row in self.patch_text.splitlines() if row.startswith(("-", "+")))
+        regenerated = tuple(row for row in self.applied["diff_after"].splitlines() if row.startswith(("-", "+")))
+        self.assertNotEqual(supplied, regenerated)
+        row = self.applied["file_postimages"][0]
+        self.assertEqual(row["expected_postimage_sha256"], row["observed_postimage_sha256"])
+        self.assertEqual(row["observed_postimage_sha256"], hashlib.sha256((self.repo / "app.py").read_bytes()).hexdigest())
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        result = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertEqual("verified", result["status"], result["deviations"])
+
+    def test_current_postimage_mismatch_is_not_verified(self):
+        observation = self.run_tests("tests.test_app.AppTests.test_value")
+        (self.repo / "app.py").write_bytes(b"def value():\n    return 3\n")
+        result = verify_execution(self.workspace, self.repo, self.applied["run_id"], observation["run_id"])
+        self.assertEqual("not_verified", result["status"])
+        self.assertIn("current_content_differs_from_phase69_observed_postimage:app.py", result["deviations"])
+
+    def test_tampered_postimage_hashes_fail_historical_integrity(self):
+        from src.developer.local_workflow import _json_bytes
+        from src.developer.test_execution import _validate_phase69
+        record = self.workspace.root / "runs" / self.applied["run_id"] / "results.json"
+        original = record.read_bytes()
+        for key in ("preimage_sha256", "expected_postimage_sha256", "observed_postimage_sha256", "file_path"):
+            with self.subTest(key=key):
+                payload = json.loads(original)
+                payload["file_postimages"][0][key] = "b.py" if key == "file_path" else "0" * 64
+                record.write_bytes(_json_bytes(payload))
+                with self.assertRaisesRegex(LocalWorkflowError, "tampered"):
+                    _validate_phase69(self.workspace, self.repo, self.applied["run_id"])
+                record.write_bytes(original)
+
     def test_phase71_preserves_nonblocking_retrieval_omission_warning(self):
         omission = {"type": "retrieval_omission", "classification": "non_blocking",
                     "evidence": {"file_path": "tests/test_app.py", "symbol_name": "AppTests.test_value",

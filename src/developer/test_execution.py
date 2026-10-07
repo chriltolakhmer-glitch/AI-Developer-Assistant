@@ -129,8 +129,11 @@ def _validate_phase69(workspace: DeveloperWorkspace, repository: Path, run_id: s
     if (result.get("status") != "applied" or result.get("tests_executed") is not False
             or result.get("git_commit_created") is not False or result.get("git_staging_performed") is not False):
         raise LocalWorkflowError("A successful Phase 69 application is required; TEST NOT EXECUTED.")
-    expected_execution_id = "execution-" + hashlib.sha256(
-        (result.get("authorization_id", "") + result.get("source_patch_id", "")).encode()).hexdigest()[:20]
+    from .patch_application import validate_postimage_evidence
+    file_postimages = validate_postimage_evidence(result)
+    expected_execution_id = "execution-" + hashlib.sha256(_json_bytes({
+        "authorization_id": result.get("authorization_id"), "source_patch_id": result.get("source_patch_id"),
+        "file_postimages": [list(row) for row in file_postimages]})).hexdigest()[:20]
     if (result.get("execution_id") != expected_execution_id
             or result.get("patch_sha256") != hashlib.sha256(result.get("expected_diff", "").encode()).hexdigest()
             or tuple(result.get("target_paths", ())) != tuple(result.get("files_changed", ()))
@@ -160,6 +163,11 @@ def _validate_phase69(workspace: DeveloperWorkspace, repository: Path, run_id: s
             or meta.get("repository_id") != result.get("repository_id")
             or str(root) != str(Path(meta.get("repository_path", "")).resolve())):
         raise LocalWorkflowError("Execution belongs to another repository; TEST NOT EXECUTED.")
+    for relative, _, _, observed in file_postimages:
+        if relative not in authorization.candidate_paths:
+            raise LocalWorkflowError("Phase 69 post-image path exceeds exact approval; TEST NOT EXECUTED.")
+        if hashlib.sha256((root / relative).read_bytes()).hexdigest() != observed:
+            raise LocalWorkflowError("Current content differs from Phase 69 observed post-image; TEST NOT EXECUTED.")
     inventory = scan_local_repository(root)
     head = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode().strip()
     paths = tuple(result["files_changed"])

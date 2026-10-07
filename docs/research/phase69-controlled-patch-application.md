@@ -99,3 +99,24 @@ Authorized target test execution and observations, user-facing rollback, automat
 ## Symbol-scope enforcement
 
 Before the first write, Phase 69 recomputes candidate symbols from the exact approved patch and repository pre-image, checks candidate scope against approved allowed scope, and requires equality with the Phase 67 and Phase 68 candidate records. After writing exact post-images, it independently attributes the observed diff and records both actual patch and observed applied symbol scope. Any mismatch blocks application and uses the existing bounded restoration behavior.
+
+## Exact authorization and byte-level application evidence
+
+Exact patch authorization is distinct from textual Git-diff serialization equality.
+Phase 68 approves one exact Phase 67 patch by ID and SHA-256. Phase 69 applies
+that exact patch with the unchanged interpreter and records `file_postimages`,
+sorted by repository-relative path. Each entry contains `file_path`,
+`preimage_sha256`, `expected_postimage_sha256`, and `observed_postimage_sha256`.
+Hashes cover exact bytes without line-ending normalization. An applied result
+requires observed bytes to equal computed expected bytes for every candidate path.
+The evidence is included in the execution identity and canonical workspace run
+identity; full source files are not embedded in the typed record.
+
+Git may group nearby removals and additions differently from the supplied patch.
+Phase 71 therefore verifies exact patch identity and the historical authorization
+chain, canonical matching expected/observed post-image hashes, and exact current
+file hashes against recorded observed hashes. It retains the recorded `diff_after`
+and current Git diff equality check for later drift, exact candidate paths, and
+path-qualified symbol scope. Equivalent output never authorizes a different patch.
+Older executions lacking this evidence fail closed; acceptance requires a fresh
+execution chain rather than rewriting preserved historical records.

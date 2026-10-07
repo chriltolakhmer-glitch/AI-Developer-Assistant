@@ -52,11 +52,15 @@ class PatchApplicationResult:
     applied_at: str
     actual_patch_symbol_scope: tuple[tuple[str, str], ...] = ()
     observed_applied_symbol_scope: tuple[tuple[str, str], ...] = ()
+    file_postimages: tuple[tuple[str, str, str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: (list(getattr(self, f.name)) if f.name in {"target_paths", "files_changed"} else
                 [{"file_path": p, "qualified_symbol": s} for p, s in getattr(self, f.name)]
-                if f.name in {"actual_patch_symbol_scope", "observed_applied_symbol_scope"} else getattr(self, f.name))
+                if f.name in {"actual_patch_symbol_scope", "observed_applied_symbol_scope"} else
+                [{"file_path": p, "preimage_sha256": before, "expected_postimage_sha256": expected,
+                  "observed_postimage_sha256": observed} for p, before, expected, observed in self.file_postimages]
+                if f.name == "file_postimages" else getattr(self, f.name))
                 for f in fields(self)}
 
 
@@ -86,6 +90,23 @@ def _load_authorization(workspace: DeveloperWorkspace, run_id: str) -> Authoriza
             or meta.get("working_tree_sha256") != record.working_tree_sha256):
         raise LocalWorkflowError("Authorization run binding is invalid; PATCH NOT APPLIED.")
     return record
+
+
+def validate_postimage_evidence(result: dict[str, Any]) -> tuple[tuple[str, str, str, str], ...]:
+    """Validate run-bound exact-byte evidence; never accepts caller-provided hashes."""
+    rows = result.get("file_postimages")
+    keys = ("file_path", "preimage_sha256", "expected_postimage_sha256", "observed_postimage_sha256")
+    paths = tuple(result.get("target_paths", ()))
+    if (not isinstance(rows, list) or not rows or paths != tuple(sorted(set(paths)))
+            or any(not isinstance(row, dict) or set(row) != set(keys) for row in rows)):
+        raise LocalWorkflowError("Phase 69 post-image evidence is missing or noncanonical.")
+    evidence = tuple(tuple(row[key] for key in keys) for row in rows)
+    if (tuple(row[0] for row in evidence) != paths
+            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                   for row in evidence for value in row[1:])
+            or any(row[2] != row[3] for row in evidence)):
+        raise LocalWorkflowError("Phase 69 post-image hashes or candidate paths are invalid.")
+    return evidence
 
 
 def _apply_text(original: bytes, patch: str) -> bytes:
@@ -278,12 +299,17 @@ def apply_approved_patch(workspace: DeveloperWorkspace, repository: Path, author
     actual_diff = _git(root, ["diff", "--no-ext-diff", "--binary", "--", *paths]).decode("utf-8", errors="replace")
     semantic_index_sha256 = hashlib.sha256(_git_index_state(root)).hexdigest()
     refs_sha256 = hashlib.sha256(_git(root, ["for-each-ref", "--format=%(refname) %(objectname)"])).hexdigest()
-    result = PatchApplicationResult("execution-" + hashlib.sha256((record.authorization_id + draft.patch_id).encode()).hexdigest()[:20],
+    file_postimages = tuple((p, hashlib.sha256(staged[p][1]).hexdigest(),
+                            hashlib.sha256(staged[p][2]).hexdigest(),
+                            hashlib.sha256(actual_bytes[p]).hexdigest()) for p in sorted(paths))
+    result = PatchApplicationResult("execution-" + hashlib.sha256(_json_bytes({
+        "authorization_id": record.authorization_id, "source_patch_id": draft.patch_id,
+        "file_postimages": [list(row) for row in file_postimages]})).hexdigest()[:20],
         "1.0", record.authorization_id, draft.source_action_id, draft.patch_id, record.repository_id,
         str(root), record.current_commit, after.commit_sha, record.working_tree_sha256, after.snapshot_id,
         paths, record.patch_sha256, "applied", tuple(sorted(expected_changed)),
         actual_diff, None, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        recomputed_symbols, observed_symbols)
+        recomputed_symbols, observed_symbols, file_postimages)
     payload = {"mode": "developer-local-patch-application", **result.to_dict(), "expected_diff": draft.patch_text,
                "semantic_index_sha256": semantic_index_sha256, "semantic_index_unchanged": index_after == index_before,
                "refs_sha256": refs_sha256, "refs_unchanged": refs_after == refs_before,

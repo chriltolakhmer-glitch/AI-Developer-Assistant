@@ -118,18 +118,6 @@ def _proposal(value: dict[str, Any]) -> ProposedAction:
         raise LocalWorkflowError("Phase 66 ProposedAction integrity validation failed.") from error
 
 
-def _patch_hunk_lines(value: str) -> tuple[str, ...]:
-    rows = []
-    for line in value.splitlines():
-        if not line.startswith(("@@", " ", "+", "-", "\\")):
-            continue
-        if line.startswith("@@"):
-            match = re.match(r"^(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@)", line)
-            line = match.group(1) if match else line
-        rows.append(line)
-    return tuple(rows)
-
-
 def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_run_id: str,
                      observation_run_id: str) -> dict[str, Any]:
     """Verify and record one exact execution/observation chain; never mutates the target."""
@@ -154,8 +142,11 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
     if (execution.get("status") != "applied" or execution.get("tests_executed") is not False
             or execution.get("git_commit_created") is not False or execution.get("git_staging_performed") is not False):
         deviations.append("phase69_execution_not_successfully_applied")
-    execution_id = "execution-" + hashlib.sha256(
-        (execution.get("authorization_id", "") + execution.get("source_patch_id", "")).encode()).hexdigest()[:20]
+    execution_id = "execution-" + hashlib.sha256(_json_bytes({
+        "authorization_id": execution.get("authorization_id"), "source_patch_id": execution.get("source_patch_id"),
+        "file_postimages": [[row.get(key) for key in (
+            "file_path", "preimage_sha256", "expected_postimage_sha256", "observed_postimage_sha256")]
+            for row in execution.get("file_postimages", ())]})).hexdigest()[:20]
     if execution.get("execution_id") != execution_id:
         deviations.append("phase69_execution_identity_mismatch")
 
@@ -406,10 +397,19 @@ def verify_execution(workspace: DeveloperWorkspace, repository: Path, execution_
         deviations.append("phase69_actual_changed_paths_exceed_phase66_proposed_scope")
     if actual_diff != execution.get("diff_after"):
         deviations.append("phase69_recorded_diff_or_current_postimage_mismatch")
+    from .patch_application import validate_postimage_evidence
+    try:
+        postimages = validate_postimage_evidence(execution)
+        for relative, _, _, observed in postimages:
+            if relative not in actual_paths:
+                deviations.append("phase69_postimage_candidate_path_mismatch")
+                continue
+            target = (root / relative).resolve(strict=True)
+            if root not in target.parents or hashlib.sha256(target.read_bytes()).hexdigest() != observed:
+                deviations.append("current_content_differs_from_phase69_observed_postimage:" + relative)
+    except (LocalWorkflowError, OSError, ValueError) as error:
+        deviations.append("phase69_postimage_evidence_invalid:" + str(error))
     if draft is not None:
-        actual_hunks, approved_hunks = _patch_hunk_lines(actual_diff), _patch_hunk_lines(draft.patch_text)
-        if actual_hunks != approved_hunks:
-            deviations.append("phase69_actual_diff_hunks_differ_from_approved_patch")
         section_paths = {new for _, new in re.findall(r"(?m)^diff --git a/(.*?) b/(.*?)$", actual_diff)}
         if section_paths != set(actual_paths):
             deviations.append("phase69_recorded_diff_paths_differ_from_actual_scope")

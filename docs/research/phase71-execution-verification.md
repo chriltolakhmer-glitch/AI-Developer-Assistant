@@ -72,3 +72,24 @@ Verification establishes consistency of the recorded chain and current repositor
 ## Symbol-scope verification
 
 Phase 71 checks Phase 65 allowed path-qualified symbols against Phase 67/68 candidate symbols and Phase 69 actual/observed symbols. Verification requires actual scope to remain within allowed scope and exact agreement between the approved candidate and applied patch. Symbol attribution is static source evidence; it does not prove runtime behavior. Phase 72 continues to consume the Phase 71 result without symbol repair or automatic action.
+
+## Exact authorization and byte-level application evidence
+
+Exact patch authorization is distinct from textual Git-diff serialization equality.
+Phase 68 approves one exact Phase 67 patch by ID and SHA-256. Phase 69 applies
+that exact patch with the unchanged interpreter and records `file_postimages`,
+sorted by repository-relative path. Each entry contains `file_path`,
+`preimage_sha256`, `expected_postimage_sha256`, and `observed_postimage_sha256`.
+Hashes cover exact bytes without line-ending normalization. An applied result
+requires observed bytes to equal computed expected bytes for every candidate path.
+The evidence is included in the execution identity and canonical workspace run
+identity; full source files are not embedded in the typed record.
+
+Git may group nearby removals and additions differently from the supplied patch.
+Phase 71 therefore verifies exact patch identity and the historical authorization
+chain, canonical matching expected/observed post-image hashes, and exact current
+file hashes against recorded observed hashes. It retains the recorded `diff_after`
+and current Git diff equality check for later drift, exact candidate paths, and
+path-qualified symbol scope. Equivalent output never authorizes a different patch.
+Older executions lacking this evidence fail closed; acceptance requires a fresh
+execution chain rather than rewriting preserved historical records.
