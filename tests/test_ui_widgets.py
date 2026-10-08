@@ -52,9 +52,10 @@ class UIWidgetTests(GitFixture):
         tabs = self.app.view.notebook.tabs()
         self.assertEqual(["Project", "Plan & Review", "Run & Result", "History"],
                          [self.app.view.notebook.tab(tab, "text") for tab in tabs])
-        for tab in tabs[2:]:
-            children = self.window.nametowidget(tab).winfo_children()
-            self.assertEqual(["TLabel"], [child.winfo_class() for child in children])
+        run_children = self.window.nametowidget(tabs[2]).winfo_children()
+        self.assertEqual(["Canvas", "TScrollbar"], [child.winfo_class() for child in run_children])
+        history_children = self.window.nametowidget(tabs[3]).winfo_children()
+        self.assertEqual(["TLabel"], [child.winfo_class() for child in history_children])
         before = self.snapshot()
         self.open()
         self.assertEqual("Clean", self.app.view.fields["clean"].get())

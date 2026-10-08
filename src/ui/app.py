@@ -22,7 +22,8 @@ class Application:
         root.minsize(780, 540)
         self.view = ShellView(root, self.open_repository, self.browse_repository, self.browse_workspace,
                               self.start_operation, self.inputs_changed,
-                              self.confirm_approval, self.cancel_approval)
+                              self.confirm_approval, self.cancel_approval,
+                              self.confirm_apply, self.cancel_apply, self.show_log)
         self.view.render(self.state)
         root.protocol("WM_DELETE_WINDOW", self.request_close)
         self.poll_id = root.after(40, self._poll)
@@ -41,16 +42,43 @@ class Application:
         self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
         self.state.patch_inputs(self.view.selected_patch.get())
         self.state.decision_inputs(self.view.audit_label.get(), self.view.review_note.get() or None)
+        self._execution_inputs()
         self.view.render(self.state)
 
-    def start_operation(self, operation: str):
+    def _execution_inputs(self):
+        for kind, selector in (('authorization', self.view.selected_authorization),
+                               ('execution', self.view.selected_execution),
+                               ('observation', self.view.selected_observation),
+                               ('verification', self.view.selected_verification)):
+            self.state.select_execution_input(kind, selector.get())
+
+    def show_log(self, stream: str, offset: int = 0):
+        self.start_operation('read_log', log_stream=stream, log_offset=offset)
+
+    def start_operation(self, operation: str, *, log_stream: str = '', log_offset: int = 0):
         if self.closed or (self.worker is not None and self.worker.is_alive()):
             return
         self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"), self.view.selected_test_ids())
         self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
         self.state.patch_inputs(self.view.selected_patch.get())
         self.state.decision_inputs(self.view.audit_label.get(), self.view.review_note.get() or None)
-        request = self.state.begin_operation(operation, self.view.repository.get(), self.view.workspace.get())
+        self._execution_inputs()
+        if operation == 'apply' and self.state.pending_apply is None:
+            decision = self.state.decision_result or {}
+            run_id = self.state.selected_authorization_run_id
+            if (run_id and decision.get('run_id') == run_id and decision.get('decision') == 'approve'
+                    and decision.get('execution_authorized') is True
+                    and decision.get('allowed_operation') == 'apply_exact_patch'
+                    and decision.get('executed') is False and not self.state.application_result
+                    and not self.state.apply_outcome_uncertain
+                    and self.state.applied_authorization_run_id != run_id):
+                self.state.pending_apply = (self.state.generation, self.state.repository, self.state.workspace, run_id)
+                self.view.open_apply_confirmation(self.state.pending_apply, decision,
+                                                  self.state.review_result, self.state.facts)
+            self.view.render(self.state)
+            return
+        request = self.state.begin_operation(operation, self.view.repository.get(), self.view.workspace.get(),
+                                             log_stream=log_stream, log_offset=log_offset)
         self.view.render(self.state)
         if request is not None:
             self.worker = Thread(target=self._read, args=(request,), name="aida-ui-operation", daemon=False)
@@ -72,6 +100,18 @@ class Application:
                     decision='approve' if request.operation == 'decide_approve' else 'reject',
                     approved_by=request.approved_by, note=request.note,
                     expected_branch=request.expected_branch if request.operation == 'decide_approve' else None)
+            elif request.operation == 'apply':
+                facts = self.service.apply(request.repository, request.workspace, request.authorization_run_id)
+            elif request.operation == 'test':
+                facts = self.service.test(request.repository, request.workspace, request.execution_run_id)
+            elif request.operation == 'verify':
+                facts = self.service.verify(request.repository, request.workspace,
+                                            request.execution_run_id, request.observation_run_id)
+            elif request.operation == 'evaluate':
+                facts = self.service.evaluate(request.repository, request.workspace, request.verification_run_id)
+            elif request.operation == 'read_log':
+                facts = self.service.read_log(request.repository, request.workspace,
+                                              request.observation_run_id, request.log_stream, request.log_offset)
             else:
                 operation = {"read_repository": self.service.read_repository, "scan": self.service.scan,
                              "index": self.service.index, "catalog_tests": self.service.catalog_tests}[request.operation]
@@ -124,6 +164,7 @@ class Application:
 
     def request_close(self):
         self.cancel_approval()
+        self.cancel_apply()
         if self.state.loading or (self.worker is not None and self.worker.is_alive()):
             self.state.close_pending = True
             self.view.render(self.state)
@@ -152,3 +193,15 @@ class Application:
             self.view.render(self.state)
             return
         self.start_operation('decide_approve')
+
+    def cancel_apply(self):
+        self.state.pending_apply = None
+        self.view.dismiss_apply_confirmation()
+        if not self.closed:
+            self.view.render(self.state)
+
+    def confirm_apply(self, context):
+        if context != self.state.pending_apply:
+            return
+        self.view.dismiss_apply_confirmation()
+        self.start_operation('apply')

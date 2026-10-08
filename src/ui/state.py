@@ -22,6 +22,12 @@ class ReadRequest:
     approved_by: str = "local-developer"
     note: str | None = None
     expected_branch: str | None = None
+    authorization_run_id: str = ""
+    execution_run_id: str = ""
+    observation_run_id: str = ""
+    verification_run_id: str = ""
+    log_stream: str = ""
+    log_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,20 @@ class ViewState:
     approved_by: str = "local-developer"
     note: str | None = None
     operation: str | None = None
+    selected_authorization_run_id: str = ""
+    application_result: dict[str, Any] | None = None
+    selected_execution_run_id: str = ""
+    observation_result: dict[str, Any] | None = None
+    selected_observation_run_id: str = ""
+    verification_result: dict[str, Any] | None = None
+    selected_verification_run_id: str = ""
+    evaluation_result: dict[str, Any] | None = None
+    operation_error: str | None = None
+    apply_outcome_uncertain: bool = False
+    applied_authorization_run_id: str = ""
+    pending_apply: tuple[int, str, str, str] | None = None
+    log_result: dict[str, Any] | None = None
+    log_error: str | None = None
     _active: ReadRequest | None = field(default=None, repr=False)
 
     def clear_candidate(self):
@@ -78,6 +98,48 @@ class ViewState:
         self.review_result = self.decision_result = None
         self.review_error = self.decision_error = None
         self.pending_approval = None
+        self.clear_execution()
+
+    def clear_execution(self):
+        self.selected_authorization_run_id = ""
+        self.application_result = None
+        self.selected_execution_run_id = ""
+        self.observation_result = None
+        self.selected_observation_run_id = ""
+        self.verification_result = None
+        self.selected_verification_run_id = ""
+        self.evaluation_result = None
+        self.operation_error = None
+        self.apply_outcome_uncertain = False
+        self.applied_authorization_run_id = ""
+        self.pending_apply = None
+        self.log_result = None
+        self.log_error = None
+
+    def select_execution_input(self, kind: str, run_id: str):
+        fields = {'authorization': ('selected_authorization_run_id', (self.decision_result or {}).get('run_id')),
+                  'execution': ('selected_execution_run_id', (self.application_result or {}).get('run_id')),
+                  'observation': ('selected_observation_run_id', (self.observation_result or {}).get('run_id')),
+                  'verification': ('selected_verification_run_id', (self.verification_result or {}).get('run_id'))}
+        field, canonical = fields[kind]
+        run_id = run_id if run_id and run_id == canonical else ''
+        if run_id == getattr(self, field):
+            return
+        self.generation += 1
+        setattr(self, field, run_id)
+        self.operation_error = None
+        if kind != 'verification':
+            self.log_result = None
+            self.log_error = None
+        order = ('authorization', 'execution', 'observation', 'verification')
+        for downstream in order[order.index(kind) + 1:]:
+            setattr(self, fields[downstream][0], '')
+        for result in {'authorization': ('application_result', 'observation_result', 'verification_result', 'evaluation_result'),
+                       'execution': ('observation_result', 'verification_result', 'evaluation_result'),
+                       'observation': ('verification_result', 'evaluation_result'),
+                       'verification': ('evaluation_result',)}[kind]:
+            setattr(self, result, None)
+        self.pending_apply = None
 
     def patch_inputs(self, patch_run_id: str):
         if patch_run_id != (self.candidate_result or {}).get('run_id'):
@@ -157,7 +219,7 @@ class ViewState:
             self.clear_candidate()
 
     def begin(self, repository: str, workspace: str) -> ReadRequest | None:
-        if self.loading or self.close_pending or self.pending_approval:
+        if self.loading or self.close_pending or self.pending_approval or self.pending_apply:
             return None
         self.select(repository, workspace)
         self.facts, self.error = None, None
@@ -173,19 +235,59 @@ class ViewState:
         self._active = ReadRequest(self.generation, self.token, repository, workspace)
         return self._active
 
-    def begin_operation(self, operation: str, repository: str, workspace: str) -> ReadRequest | None:
+    def begin_operation(self, operation: str, repository: str, workspace: str,
+                        *, log_stream: str = "", log_offset: int = 0) -> ReadRequest | None:
         if operation == "read_repository":
             return self.begin(repository, workspace)
-        if self.loading or self.close_pending or (self.pending_approval and operation != 'decide_approve'):
+        if (self.loading or self.close_pending or (self.pending_approval and operation != 'decide_approve')
+                or (self.pending_apply and operation != 'apply')):
             return None
         if operation not in {"scan", "index", "catalog_tests", "plan", "import_candidate",
-                             "review_patch", "review_approval", "decide_approve", "decide_reject"}:
+                             "review_patch", "review_approval", "decide_approve", "decide_reject",
+                             "apply", "test", "verify", "evaluate", "read_log"}:
             raise ValueError("Unsupported UI operation")
         self.select(repository, workspace)
         self.error = None
         if self.facts is None:
             self.error = "Open the selected repository before requesting an operation."
             return None
+        if operation == 'read_log':
+            if (log_stream not in {'stdout', 'stderr'} or not isinstance(log_offset, int)
+                    or log_offset < 0 or not self.selected_observation_run_id
+                    or self.selected_observation_run_id != (self.observation_result or {}).get('run_id')):
+                self.log_result = None
+                self.log_error = 'Select the exact Phase 70 observation before viewing logs.'
+                return None
+            self.log_result = None
+            self.log_error = None
+        if operation in {'apply', 'test', 'verify', 'evaluate'}:
+            decision = self.decision_result or {}
+            application = self.application_result or {}
+            observation = self.observation_result or {}
+            verification = self.verification_result or {}
+            eligible = {
+                'apply': bool(self.pending_apply == (self.generation, repository, workspace,
+                                self.selected_authorization_run_id) and self.selected_authorization_run_id
+                              and decision.get('run_id') == self.selected_authorization_run_id
+                              and decision.get('decision') == 'approve'
+                              and decision.get('execution_authorized') is True
+                              and decision.get('allowed_operation') == 'apply_exact_patch'
+                              and decision.get('executed') is False and not self.application_result
+                              and not self.apply_outcome_uncertain
+                              and self.applied_authorization_run_id != self.selected_authorization_run_id),
+                'test': bool(self.selected_execution_run_id and application.get('run_id') == self.selected_execution_run_id
+                             and application.get('status') == 'applied' and not self.observation_result),
+                'verify': bool(self.selected_execution_run_id and application.get('run_id') == self.selected_execution_run_id
+                               and self.selected_observation_run_id and observation.get('run_id') == self.selected_observation_run_id
+                               and not self.verification_result),
+                'evaluate': bool(self.selected_verification_run_id and verification.get('run_id') == self.selected_verification_run_id
+                                 and not self.evaluation_result),
+            }[operation]
+            if not eligible:
+                self.operation_error = 'Select the exact eligible input run and request this action explicitly.'
+                return None
+            self.operation_error = None
+            self.pending_apply = None
         if operation in {'review_patch', 'review_approval', 'decide_approve', 'decide_reject'}:
             if not self.selected_patch_run_id or self.selected_patch_run_id != (self.candidate_result or {}).get('run_id'):
                 self.clear_review()
@@ -231,7 +333,12 @@ class ViewState:
                                    patch_path=self.candidate_path,
                                    patch_run_id=self.selected_patch_run_id, approved_by=self.approved_by, note=self.note,
                                    expected_branch=(self.pending_approval.branch_reference if self.pending_approval
-                                                    else self.branch_reference(self.facts)))
+                                                    else self.branch_reference(self.facts)),
+                                   authorization_run_id=self.selected_authorization_run_id,
+                                   execution_run_id=self.selected_execution_run_id,
+                                   observation_run_id=self.selected_observation_run_id,
+                                   verification_run_id=self.selected_verification_run_id,
+                                   log_stream=log_stream, log_offset=log_offset)
         if operation == 'decide_approve':
             self.pending_approval = None
         return self._active
@@ -243,11 +350,26 @@ class ViewState:
         if request.generation != self.generation:
             return False
         self.error = error
+        if request.operation == 'read_log':
+            self.log_result = facts
+            self.log_error = error
+            return True
+        if request.operation in {'apply', 'test', 'verify', 'evaluate'}:
+            self.operation_error = error
+            if request.operation == 'apply' and error:
+                self.apply_outcome_uncertain = True
+            if request.operation == 'apply' and facts is not None and facts.get('status') == 'applied':
+                self.applied_authorization_run_id = request.authorization_run_id
+            if facts is not None:
+                setattr(self, {'apply': 'application_result', 'test': 'observation_result',
+                               'verify': 'verification_result', 'evaluate': 'evaluation_result'}[request.operation], facts)
+            return True
         if request.operation in {'review_patch', 'review_approval'}:
             self.review_result = facts
             self.review_error = error
             return True
         if request.operation in {'decide_approve', 'decide_reject'}:
+            self.clear_execution()
             self.decision_result = facts
             self.decision_error = error
             if error:

@@ -72,3 +72,26 @@ class RepositoryService:
                 raise LocalWorkflowError("Repository branch context changed; reload the session and review explicitly.")
         return record_patch_decision(developer, root, patch_run_id,
                                      decision, approved_by=approved_by, note=note)
+
+    def apply(self, repository: str, workspace: str, authorization_run_id: str) -> dict[str, Any]:
+        from src.developer.patch_application import apply_approved_patch
+        return apply_approved_patch(self._workspace(workspace), Path(repository), authorization_run_id)
+
+    def test(self, repository: str, workspace: str, execution_run_id: str) -> dict[str, Any]:
+        from src.developer.test_execution import execute_applied_patch_tests
+        return execute_applied_patch_tests(self._workspace(workspace), Path(repository), execution_run_id, tests=())
+
+    def verify(self, repository: str, workspace: str, execution_run_id: str,
+               observation_run_id: str) -> dict[str, Any]:
+        from src.developer.execution_verification import verify_execution
+        return verify_execution(self._workspace(workspace), Path(repository), execution_run_id, observation_run_id)
+
+    def evaluate(self, repository: str, workspace: str, verification_run_id: str) -> dict[str, Any]:
+        from src.developer.recovery_evaluation import evaluate_recovery
+        return evaluate_recovery(self._workspace(workspace), Path(repository), verification_run_id)
+
+    def read_log(self, repository: str, workspace: str, observation_run_id: str,
+                 stream: str, offset: int = 0) -> dict[str, Any]:
+        from src.developer.ui_read import read_observation_log
+        return read_observation_log(self._workspace(workspace), Path(repository),
+                                    observation_run_id, stream, offset)

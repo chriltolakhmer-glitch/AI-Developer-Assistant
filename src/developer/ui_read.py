@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -144,3 +145,62 @@ def review_patch(workspace: DeveloperWorkspace, repository: Path,
         "bound_tests": bound_tests, "linked_plan_error": plan_error,
         "plan_warnings": warnings,
     }
+
+
+def read_observation_log(workspace: DeveloperWorkspace, repository: Path,
+                         observation_run_id: str, stream: str, offset: int = 0,
+                         *, chunk_size: int = 65536) -> dict[str, Any]:
+    """Read one verified external Phase 70 log chunk without creating evidence."""
+    from .execution_verification import _read_run
+    from .local_workflow import scan_local_repository
+
+    if stream not in {"stdout", "stderr"} or not isinstance(offset, int) or offset < 0:
+        raise LocalWorkflowError("Invalid Phase 70 log stream or offset.")
+    if not isinstance(chunk_size, int) or not 0 < chunk_size <= 65536:
+        raise LocalWorkflowError("Invalid Phase 70 log chunk size.")
+    root = Path(repository).expanduser().resolve(strict=True)
+    workspace._validate_isolation(root)
+    metadata, observation = _read_run(workspace, observation_run_id, "observation")
+    inventory = scan_local_repository(root)
+    if (metadata.get("repository_path") != str(root)
+            or metadata.get("repository_id") != inventory.repository_id
+            or observation.get("repository_path") != str(root)
+            or observation.get("repository_id") != inventory.repository_id):
+        raise LocalWorkflowError("Phase 70 observation belongs to a different repository.")
+    observation_id = observation.get("observation_id")
+    if (not isinstance(observation_id, str) or not observation_id.startswith("observation-")
+            or len(observation_id) != len("observation-") + 20
+            or any(character not in "0123456789abcdef" for character in observation_id[len("observation-"):])):
+        raise LocalWorkflowError("Phase 70 observation ID is malformed.")
+    evidence_root = workspace.root / "evidence"
+    observation_root = evidence_root / observation_id
+    log_path = observation_root / f"{stream}.log"
+    reference = observation.get(f"{stream}_reference")
+    digest = observation.get(f"{stream}_sha256")
+    if reference != str(log_path) or not isinstance(digest, str) or len(digest) != 64:
+        raise LocalWorkflowError("Phase 70 log reference or digest differs from its canonical observation.")
+    for part in (evidence_root, observation_root, log_path):
+        if part.is_symlink():
+            raise LocalWorkflowError("Phase 70 log path contains a symlink.")
+    workspace._contained(log_path)
+    if not log_path.is_file():
+        raise LocalWorkflowError("Phase 70 log is missing or not a regular file.")
+    try:
+        with log_path.open("rb") as handle:
+            checksum = hashlib.sha256()
+            while block := handle.read(65536):
+                checksum.update(block)
+            total = handle.tell()
+            if checksum.hexdigest() != digest:
+                raise LocalWorkflowError("Phase 70 log SHA-256 mismatch; stored content was altered.")
+            if offset > total:
+                raise LocalWorkflowError("Phase 70 log offset exceeds the stored content.")
+            handle.seek(offset)
+            content = handle.read(chunk_size)
+    except OSError as error:
+        raise LocalWorkflowError(f"Cannot read Phase 70 log: {error}") from error
+    end = offset + len(content)
+    return {"observation_run_id": observation_run_id, "observation_id": observation_id,
+            "stream": stream, "reference": reference, "sha256": digest, "integrity": "verified",
+            "offset": offset, "end": end, "total_bytes": total, "has_more": end < total,
+            "content": content.decode("utf-8", errors="replace")}

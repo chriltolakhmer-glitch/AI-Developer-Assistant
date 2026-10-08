@@ -94,14 +94,16 @@ class CandidateWidgetTests(fixtures.CandidateFixture):
         self.assertIsNone(self.app.state.candidate_result)
         self.assertEqual('', self.app.view.candidate_details.get('1.0', 'end-1c'))
 
-    def test_one_worker_pending_close_and_no_application_controls(self):
+    def test_one_worker_pending_close_and_separate_application_controls(self):
         self.plan(); started, release, tick = Event(), Event(), Event()
         def buttons(widget):
             return ([str(widget.cget('text'))] if widget.winfo_class() == 'TButton' else []) + [label for child in widget.winfo_children() for label in buttons(child)]
         labels = ' '.join(buttons(self.app.view.notebook)).lower()
         self.assertIn('approve', labels)
         self.assertIn('reject', labels)
-        for forbidden in ('apply', 'verify', 'evaluate', 'rollback'):
+        for required in ('apply approved patch', 'run bound tests', 'verify execution', 'evaluate recovery'):
+            self.assertIn(required, labels)
+        for forbidden in ('rollback', 'retry', 'repair'):
             self.assertNotIn(forbidden, labels)
         self.addCleanup(release.set)
         original_render, main_thread = self.app.view.render, get_ident()

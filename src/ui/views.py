@@ -20,21 +20,93 @@ class ShellView:
     )
 
     def __init__(self, root, open_repository, browse_repository, browse_workspace, start_operation, inputs_changed,
-                 confirm_approval, cancel_approval):
+                 confirm_approval, cancel_approval, confirm_apply=None, cancel_apply=None, show_log=None):
         self.rendering = False
         self.root = root
         self.confirm_approval, self.cancel_approval = confirm_approval, cancel_approval
         self.confirmation = None
+        self.confirm_apply, self.cancel_apply = confirm_apply, cancel_apply
+        self.show_log = show_log
+        self.apply_confirmation = None
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=12)
         self.project = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(self.project, text="Project")
         self.plan = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(self.plan, text="Plan & Review")
-        for title in ("Run & Result", "History"):
-            placeholder = ttk.Frame(self.notebook, padding=20)
-            ttk.Label(placeholder, text="Available in a later UI slice.").pack(anchor="w")
-            self.notebook.add(placeholder, text=title)
+        self.run_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(self.run_tab, text='Run & Result')
+        history = ttk.Frame(self.notebook, padding=20)
+        ttk.Label(history, text='Available in a later UI slice.').pack(anchor='w')
+        self.notebook.add(history, text='History')
+        self.run_tab.columnconfigure(0, weight=1)
+        self.run_tab.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(self.run_tab, highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky='nsew')
+        scrollbar = ttk.Scrollbar(self.run_tab, orient='vertical', command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        self.run_content = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=self.run_content, anchor='nw')
+        self.run_content.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(window_id, width=e.width))
+        self.run_sections = []
+        for title, attribute, button_title, operation in (
+            ('Authorized patch', 'selected_authorization', 'Apply approved patch', 'apply'),
+            ('Application result', 'selected_execution', 'Run bound tests', 'test'),
+            ('Test observation', 'selected_observation', 'Verify execution', 'verify'),
+            ('Verification result', 'selected_verification', 'Evaluate recovery', 'evaluate'),
+            ('Recovery evaluation', None, None, None)):
+            frame = ttk.LabelFrame(self.run_content, text=title, padding=6)
+            frame.pack(fill='x', pady=4)
+            if attribute:
+                selector = tk.StringVar(root)
+                setattr(self, attribute, selector)
+                combo = ttk.Combobox(frame, textvariable=selector, state='readonly')
+                combo.pack(fill='x')
+                combo.bind('<<ComboboxSelected>>', lambda _e: inputs_changed())
+            else:
+                combo = None
+            detail = ScrolledText(frame, height=8, wrap='word', state='disabled')
+            detail.pack(fill='x', expand=True, pady=3)
+            button = ttk.Button(frame, text=button_title, command=lambda op=operation: start_operation(op)) if operation else None
+            if button:
+                button.pack(anchor='w')
+            self.run_sections.append((combo, detail, button))
+        self.apply_button = self.run_sections[0][2]
+        self.test_button = self.run_sections[1][2]
+        self.verify_button = self.run_sections[2][2]
+        self.evaluate_button = self.run_sections[3][2]
+        log_frame = ttk.LabelFrame(self.run_sections[2][1].master, text='Phase 70 external logs (read only)', padding=5)
+        log_frame.pack(fill='x', pady=4)
+        log_actions = ttk.Frame(log_frame)
+        log_actions.pack(fill='x')
+        self.stdout_button = ttk.Button(log_actions, text='View stdout',
+                                        command=lambda: self.show_log('stdout', 0))
+        self.stdout_button.pack(side='left')
+        self.stderr_button = ttk.Button(log_actions, text='View stderr',
+                                        command=lambda: self.show_log('stderr', 0))
+        self.stderr_button.pack(side='left', padx=4)
+        self.previous_log_button = ttk.Button(log_actions, text='Previous chunk',
+                                              command=lambda: self._navigate_log(False))
+        self.previous_log_button.pack(side='left', padx=12)
+        self.next_log_button = ttk.Button(log_actions, text='Next chunk',
+                                          command=lambda: self._navigate_log(True))
+        self.next_log_button.pack(side='left')
+        self.log_status = tk.StringVar(root, value='Select an observation and choose stdout or stderr.')
+        ttk.Label(log_frame, textvariable=self.log_status, wraplength=850).pack(anchor='w')
+        log_text_frame = ttk.Frame(log_frame)
+        log_text_frame.pack(fill='x', expand=True)
+        self.log_text = tk.Text(log_text_frame, height=10, wrap='none', state='disabled')
+        self.log_text.grid(row=0, column=0, sticky='nsew')
+        log_vertical = ttk.Scrollbar(log_text_frame, orient='vertical', command=self.log_text.yview)
+        log_vertical.grid(row=0, column=1, sticky='ns')
+        log_horizontal = ttk.Scrollbar(log_text_frame, orient='horizontal', command=self.log_text.xview)
+        log_horizontal.grid(row=1, column=0, sticky='ew')
+        self.log_text.configure(yscrollcommand=log_vertical.set, xscrollcommand=log_horizontal.set)
+        log_text_frame.columnconfigure(0, weight=1)
+        log_text_frame.rowconfigure(0, weight=1)
+        self._log_navigation = None
         self.project.columnconfigure(1, weight=1)
         self.repository = tk.StringVar(root)
         self.workspace = tk.StringVar(root)
@@ -328,6 +400,113 @@ class ShellView:
             self.confirmation.destroy()
             self.confirmation = None
 
+    def open_apply_confirmation(self, context, decision, review, facts):
+        if self.apply_confirmation is not None:
+            return
+        dialog = tk.Toplevel(self.root)
+        self.apply_confirmation = dialog
+        dialog.title('Confirm exact patch application')
+        dialog.geometry('760x530')
+        dialog.transient(self.root)
+        ttk.Label(dialog, text='Apply this exact approved patch to the selected repository? This changes source files. It will not run tests, stage files, commit, or push.',
+                  wraplength=720, padding=10).pack(fill='x')
+        detail = ScrolledText(dialog, wrap='word', state='disabled')
+        detail.pack(fill='both', expand=True, padx=10)
+        draft = (review or {}).get('draft', {})
+        shown = {'repository_path': context[1], 'current_head': (facts or {}).get('head'),
+                 'approved_head': decision.get('current_commit'), 'authorization_id': decision.get('authorization_id'),
+                 'authorization_run_id': context[3], 'source_patch_id': decision.get('source_patch_id'),
+                 'patch_sha256': decision.get('patch_sha256'), 'candidate_paths': draft.get('candidate_paths'),
+                 'candidate_symbol_scope': draft.get('candidate_symbol_scope'),
+                 'approved_by': decision.get('approved_by'), 'approval_record': decision}
+        self._replace_text(detail, self._row_text(shown) + '\nWorking tree will contain source changes after application.')
+        controls = ttk.Frame(dialog, padding=10)
+        controls.pack(fill='x')
+        ttk.Button(controls, text='Apply approved patch', command=lambda: self.confirm_apply(context)).pack(side='left')
+        cancel = ttk.Button(controls, text='Cancel', command=self.cancel_apply)
+        cancel.pack(side='right')
+        dialog.protocol('WM_DELETE_WINDOW', self.cancel_apply)
+        dialog.grab_set()
+        cancel.focus_set()
+
+    def dismiss_apply_confirmation(self):
+        if self.apply_confirmation is not None:
+            self.apply_confirmation.grab_release()
+            self.apply_confirmation.destroy()
+            self.apply_confirmation = None
+
+    def _navigate_log(self, forward):
+        row = self._log_navigation
+        if row is None:
+            return
+        offset = row['end'] if forward else max(0, row['offset'] - 65536)
+        self.show_log(row['stream'], offset)
+
+    def _render_run(self, state):
+        decision, application = state.decision_result or {}, state.application_result or {}
+        observation, verification = state.observation_result or {}, state.verification_result or {}
+        evaluation = state.evaluation_result or {}
+        records = (decision, application, observation, verification)
+        selected = (state.selected_authorization_run_id, state.selected_execution_run_id,
+                    state.selected_observation_run_id, state.selected_verification_run_id)
+        for index, (combo, detail, button) in enumerate(self.run_sections):
+            record = records[index] if index < 4 else evaluation
+            if combo is not None:
+                run_id = record.get('run_id', '')
+                combo.configure(values=(run_id,) if run_id else (),
+                                state='disabled' if state.loading or state.close_pending else 'readonly')
+                combo.set(selected[index])
+            heading = ('Select the exact input run ID above.\n' if combo is not None else '')
+            if index == 0:
+                heading += 'Approval permits only exact patch application.\n'
+            elif index == 1:
+                heading += 'PATCH APPLIED — TESTS NOT YET EXECUTED\n' if application.get('status') == 'applied' and not observation else ''
+                bound = (state.review_result or {}).get('bound_tests')
+                heading += 'Bound Phase 65 test identities: ' + json.dumps(bound if bound is not None else 'unavailable', ensure_ascii=False) + '\n'
+                heading += 'Phase 70 runs the selected unittest methods with the current local user’s privileges. It is not an operating-system sandbox.\n'
+            elif index == 4:
+                heading += 'Recovery options are for human review only. No retry, rollback, repair, or lifecycle transition was performed.\n'
+            if state.loading and state.operation == ('apply', 'test', 'verify', 'evaluate', '')[index]:
+                heading += ('Running Phase 69 application…', 'Running Phase 70 bound tests…',
+                            'Running Phase 71 verification…', 'Running Phase 72 recovery evaluation…', '')[index] + '\n'
+            if state.operation_error and state.operation == ('apply', 'test', 'verify', 'evaluate', '')[index]:
+                heading += 'Backend error: ' + state.operation_error + '\nFinal persistence or execution status may require evidence inspection.\n'
+            self._replace_text(detail, heading + self._row_text(record))
+            if button:
+                eligible = (bool(selected[0] and decision.get('decision') == 'approve' and
+                                 decision.get('execution_authorized') is True and
+                                 decision.get('allowed_operation') == 'apply_exact_patch' and
+                                 decision.get('executed') is False and not state.application_result
+                                 and not state.apply_outcome_uncertain
+                                 and state.applied_authorization_run_id != selected[0]),
+                            bool(selected[1] and application.get('status') == 'applied' and not state.observation_result),
+                            bool(selected[1] and selected[2] and not state.verification_result),
+                            bool(selected[3] and not state.evaluation_result))[index]
+                button.configure(state='normal' if eligible and not state.loading and not state.close_pending else 'disabled')
+        if self.apply_confirmation and state.pending_apply is None:
+            self.dismiss_apply_confirmation()
+        log = state.log_result
+        self._log_navigation = log
+        ready = bool(state.selected_observation_run_id and not state.loading and not state.close_pending)
+        for button in (self.stdout_button, self.stderr_button):
+            button.configure(state='normal' if ready else 'disabled')
+        self.previous_log_button.configure(state='normal' if ready and log and log['offset'] > 0 else 'disabled')
+        self.next_log_button.configure(state='normal' if ready and log and log['has_more'] else 'disabled')
+        if state.loading and state.operation == 'read_log':
+            log_message = 'Reading canonical Phase 70 log…'
+        elif state.log_error:
+            log_message = 'Log unavailable: ' + state.log_error
+        elif log:
+            log_message = (f"{log['stream']} | observation run {log['observation_run_id']} | "
+                           f"SHA-256 {log['sha256']} | integrity {log['integrity']} | "
+                           f"bytes {log['offset']}–{log['end']} of {log['total_bytes']}")
+            if log['has_more']:
+                log_message += ' | More content exists; choose Next chunk.'
+        else:
+            log_message = 'Select an observation and choose stdout or stderr.'
+        self.log_status.set(log_message)
+        self._replace_text(self.log_text, log['content'] if log else '')
+
     @staticmethod
     def _replace_text(widget, text):
         widget.configure(state="normal")
@@ -580,3 +759,4 @@ class ShellView:
             self.decision_status.set(f'Phase 68 presentation error: {failure}')
             self._replace_text(self.decision_details, json.dumps(state.decision_result or state.review_result,
                                                                ensure_ascii=False, indent=2))
+        self._render_run(state)
