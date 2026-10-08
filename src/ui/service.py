@@ -1,4 +1,4 @@
-"""Slice 2 adapter: explicit inventory/index/planning, no patch or execution API."""
+"""Thin adapters for explicit repository operations and review-only Phase 67."""
 
 from pathlib import Path
 from typing import Any
@@ -40,3 +40,15 @@ class RepositoryService:
         from src.developer.implementation_planning import plan_change
         return plan_change(self._workspace(workspace), Path(repository), goal=goal,
                            top_k=top_k, expected_tests=expected_tests)
+
+    def import_candidate(self, repository: str, workspace: str, *, plan_run_id: str,
+                         proposal: dict[str, Any], patch_path: str) -> dict[str, Any]:
+        from src.developer.patch_drafting import SuppliedPatchGenerator, draft_patch
+        root = Path(repository).expanduser().resolve()
+        candidate = Path(patch_path).expanduser().resolve(strict=True)
+        if candidate == root or root in candidate.parents:
+            raise ValueError("Candidate patch file must be outside the target repository.")
+        # Binary read preserves CRLF and all other UTF-8 text exactly.
+        text = candidate.read_bytes().decode("utf-8")
+        return draft_patch(self._workspace(workspace), root, proposal,
+                           SuppliedPatchGenerator(text), plan_run_id=plan_run_id)

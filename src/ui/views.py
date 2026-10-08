@@ -1,11 +1,14 @@
 """Four-tab shell with explicit repository inventory/index and goal planning."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
+from tkinter.scrolledtext import ScrolledText
 import json
+import hashlib
 
 from .formatters import TARGET_ROLES, format_plan, role_label
 from .state import ViewState
+from .diff_view import DiffView
 
 
 class ShellView:
@@ -77,13 +80,57 @@ class ShellView:
         self.plan_button.pack(anchor="w", pady=6)
         self.plan_status = tk.StringVar(root)
         ttk.Label(self.plan, textvariable=self.plan_status, wraplength=880).pack(anchor="w")
+        review_tabs = ttk.Notebook(self.plan)
+        self.review_tabs = review_tabs
+        review_tabs.pack(fill='both', expand=True)
+        evidence_tab = ttk.Frame(review_tabs)
+        evidence_canvas = tk.Canvas(evidence_tab, highlightthickness=0, takefocus=True)
+        canvas_scroll = ttk.Scrollbar(evidence_tab, orient='vertical', command=evidence_canvas.yview)
+        canvas_scroll.pack(side='right', fill='y')
+        evidence_canvas.pack(side='left', fill='both', expand=True)
+        evidence_canvas.configure(yscrollcommand=canvas_scroll.set)
+        self.plan_evidence = ttk.Frame(evidence_canvas)
+        evidence_window = evidence_canvas.create_window((0, 0), window=self.plan_evidence, anchor='nw')
+        self.plan_evidence.bind('<Configure>', lambda _event: evidence_canvas.configure(scrollregion=evidence_canvas.bbox('all')))
+        evidence_canvas.bind('<Configure>', lambda event: evidence_canvas.itemconfigure(evidence_window, width=event.width))
+        evidence_canvas.bind('<Next>', lambda _event: evidence_canvas.yview_scroll(1, 'pages'))
+        evidence_canvas.bind('<Prior>', lambda _event: evidence_canvas.yview_scroll(-1, 'pages'))
+        self.candidate_frame = ttk.Frame(review_tabs, padding=6)
+        review_tabs.add(evidence_tab, text='Planning evidence')
+        review_tabs.add(self.candidate_frame, text='Candidate patch')
+        self.selected_plan = tk.StringVar(root)
+        self.candidate_path = tk.StringVar(root)
+        candidate_inputs = ttk.Frame(self.candidate_frame)
+        candidate_inputs.pack(fill='x')
+        candidate_inputs.columnconfigure(1, weight=1)
+        ttk.Label(candidate_inputs, text='Selected Phase 65 plan').grid(row=0, column=0, sticky='w')
+        self.plan_selector = ttk.Combobox(candidate_inputs, textvariable=self.selected_plan, state='readonly')
+        self.plan_selector.grid(row=0, column=1, columnspan=3, sticky='ew')
+        ttk.Label(candidate_inputs, text='External UTF-8 patch file').grid(row=1, column=0, sticky='w')
+        self.candidate_entry = ttk.Entry(candidate_inputs, textvariable=self.candidate_path)
+        self.candidate_entry.grid(row=1, column=1, sticky='ew')
+        self.candidate_browse = ttk.Button(candidate_inputs, text='Browse…', command=self._browse_candidate)
+        self.candidate_browse.grid(row=1, column=2, padx=4)
+        self.candidate_validate = ttk.Button(candidate_inputs, text='Validate imported patch', command=lambda: start_operation('import_candidate'))
+        self.candidate_validate.grid(row=1, column=3)
+        ttk.Label(self.candidate_frame, text='Explicit Phase 67 records external workspace evidence. Target source remains unchanged.').pack(anchor='w')
+        self.candidate_status = tk.StringVar(root)
+        ttk.Label(self.candidate_frame, textvariable=self.candidate_status, wraplength=900, justify='left').pack(anchor='w')
+        candidate_panes = ttk.Panedwindow(self.candidate_frame, orient='vertical')
+        candidate_panes.pack(fill='both', expand=True)
+        scope_frame = ttk.Frame(candidate_panes)
+        self.candidate_details = ScrolledText(scope_frame, height=4, wrap='word', state='disabled')
+        self.candidate_details.pack(fill='both', expand=True)
+        candidate_panes.add(scope_frame, weight=1)
+        self.diff_view = DiffView(candidate_panes)
+        candidate_panes.add(self.diff_view, weight=2)
         self.plan_header = tk.StringVar(root, value="No plan selected.")
-        ttk.Label(self.plan, textvariable=self.plan_header, justify="left", wraplength=1000).pack(anchor="w", fill="x", pady=4)
-        self.raw_detail_button = ttk.Button(self.plan, text="View raw plan details", command=self.open_raw_plan)
+        ttk.Label(self.plan_evidence, textvariable=self.plan_header, justify="left", wraplength=1000).pack(anchor="w", fill="x", pady=4)
+        self.raw_detail_button = ttk.Button(self.plan_evidence, text="View raw plan details", command=self.open_raw_plan)
         self.raw_detail_button.pack(anchor="w", pady=2)
         self._current_plan = None
         self.raw_detail_window = None
-        target_frame = ttk.LabelFrame(self.plan, text="Implementation targets", padding=5)
+        target_frame = ttk.LabelFrame(self.plan_evidence, text="Implementation targets", padding=5)
         target_frame.pack(fill="x", pady=4)
         target_frame.columnconfigure(0, weight=1)
         target_frame.columnconfigure(1, weight=2)
@@ -100,7 +147,7 @@ class ShellView:
         self.target_detail = tk.Text(target_frame, height=7, wrap="word", state="disabled")
         self.target_detail.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         self.target_tree.bind("<<TreeviewSelect>>", self._target_selected)
-        evidence_frame = ttk.LabelFrame(self.plan, text="Plan evidence", padding=5)
+        evidence_frame = ttk.LabelFrame(self.plan_evidence, text="Plan evidence", padding=5)
         evidence_frame.pack(fill="both", expand=True, pady=4)
         evidence_frame.rowconfigure(0, weight=1)
         evidence_frame.columnconfigure(0, weight=1)
@@ -112,7 +159,9 @@ class ShellView:
         self.controls = (self.repository_entry, self.workspace_entry, self.browse_repo_button,
                          self.open_button, self.browse_workspace_button, self.refresh_button,
                          self.scan_button, self.index_button, self.goal, self.catalog_button, self.tests, self.plan_button)
-        self.controls += (self.raw_detail_button,)
+        self.controls += (self.raw_detail_button, self.candidate_entry, self.candidate_browse, self.candidate_validate)
+        self.selected_plan.trace_add('write', lambda *_: inputs_changed())
+        self.candidate_path.trace_add('write', lambda *_: inputs_changed())
         self.repository.trace_add("write", lambda *_: inputs_changed())
         self.workspace.trace_add("write", lambda *_: inputs_changed())
         self.goal.bind("<<Modified>>", lambda *_: self._goal_changed(inputs_changed))
@@ -122,6 +171,43 @@ class ShellView:
         if self.goal.edit_modified():
             self.goal.edit_modified(False)
             callback()
+
+    def _browse_candidate(self):
+        chosen = filedialog.askopenfilename(parent=self.plan, title='Select external unified diff', filetypes=[('Patch files', '*.diff *.patch'), ('All files', '*')])
+        if chosen:
+            self.candidate_path.set(chosen)
+
+    def _render_candidate(self, state):
+        plan = state.plan_result or {}
+        self.plan_selector.configure(values=(plan['run_id'],) if plan.get('run_id') else (),
+            state='disabled' if state.loading or state.close_pending else 'readonly')
+        self.selected_plan.set(state.selected_plan_run_id)
+        self.candidate_path.set(state.candidate_path)
+        result = state.candidate_result
+        status = 'Select a completed plan, choose an external candidate, then explicitly validate.'
+        status += f"\nSelected Phase 65 run: {state.selected_plan_run_id or 'unavailable'} | Phase 66 action: {plan.get('proposed_action', {}).get('action_id', 'unavailable')}"
+        if state.operation == 'import_candidate' and state.loading:
+            status = 'Running Phase 67 validation…'
+        elif state.error:
+            status = state.error
+            if state.operation == 'import_candidate':
+                status += '\nPhase 67 expects direct --- / +++ unified-diff file headers; unsupported metadata is not removed.'
+        elif result:
+            status = f"Phase 67: {result.get('status', 'unavailable')}"
+            status += (' | Human review pending' if result.get('status') == 'draft' else ' | No accepted patch body')
+        self.candidate_status.set(status)
+        body = ''
+        detail = ''
+        if result:
+            detail = self._row_text({key: value for key, value in result.items()
+                if key not in {'patch_text', 'target_paths', 'candidate_paths', 'allowed_symbol_scope', 'candidate_symbol_scope'}})
+            detail += '\n\nAllowed by Phase 66 / Phase 67 evidence\n' + self._row_text({key: result[key] for key in ('target_paths', 'allowed_symbol_scope') if key in result})
+            detail += '\n\nActually present in validated candidate\n' + self._row_text({key: result[key] for key in ('candidate_paths', 'candidate_symbol_scope') if key in result})
+            if result.get('status') == 'draft':
+                body = result.get('patch_text', '')
+                detail += '\nDisplay-only patch SHA-256: ' + hashlib.sha256(body.encode('utf-8')).hexdigest()
+        self._replace_text(self.candidate_details, detail)
+        self.diff_view.show(body)
 
     @staticmethod
     def _replace_text(widget, text):
@@ -358,3 +444,11 @@ class ShellView:
                 self.tests.selection_set(index)
         self.plan_status.set(message)
         self._render_plan(state.plan_result)
+        try:
+            self._render_candidate(state)
+        except (KeyError, TypeError, ValueError, tk.TclError) as failure:
+            result = state.candidate_result or {}
+            self.candidate_status.set(f"Phase 67: {result.get('status', 'unavailable')} | Presentation error: {failure}")
+            self._replace_text(self.candidate_details, json.dumps({key: value for key, value in result.items() if key != 'patch_text'}, ensure_ascii=False, indent=2))
+            body = result.get('patch_text', '') if result.get('status') == 'draft' else ''
+            self.diff_view.show(body if isinstance(body, str) else '')

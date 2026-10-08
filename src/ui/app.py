@@ -1,4 +1,4 @@
-"""Tk main-loop controller and one worker for explicit Slice 2 operations."""
+"""Tk main-loop controller and one worker for explicit backend operations."""
 
 from pathlib import Path
 from queue import Empty, Queue
@@ -37,12 +37,14 @@ class Application:
         self.state.select(repository, workspace)
         self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"),
                                    self.view.selected_test_ids() if same_session else ())
+        self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
         self.view.render(self.state)
 
     def start_operation(self, operation: str):
         if self.closed or (self.worker is not None and self.worker.is_alive()):
             return
         self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"), self.view.selected_test_ids())
+        self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
         request = self.state.begin_operation(operation, self.view.repository.get(), self.view.workspace.get())
         self.view.render(self.state)
         if request is not None:
@@ -54,6 +56,9 @@ class Application:
             if request.operation == "plan":
                 facts = self.service.plan(request.repository, request.workspace, goal=request.goal,
                                           top_k=request.top_k, expected_tests=request.expected_tests)
+            elif request.operation == "import_candidate":
+                facts = self.service.import_candidate(request.repository, request.workspace,
+                    plan_run_id=request.plan_run_id, proposal=request.proposal, patch_path=request.patch_path)
             else:
                 operation = {"read_repository": self.service.read_repository, "scan": self.service.scan,
                              "index": self.service.index, "catalog_tests": self.service.catalog_tests}[request.operation]
@@ -77,6 +82,7 @@ class Application:
                 self.state.facts = None
                 self.state.plan_result = self.state.scan_result = self.state.index_result = self.state.test_catalog = None
                 self.state.error = f"Cannot display repository result: {failure}"
+                self.state.clear_candidate()
                 self.view.render(self.state)
         if self.state.close_pending and not self.state.loading and not (self.worker and self.worker.is_alive()):
             self._destroy()
