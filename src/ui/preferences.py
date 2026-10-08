@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 
 
@@ -22,8 +23,19 @@ class AppearancePreferences:
     def _validate(self, repository=""):
         lexical = self.path.expanduser().absolute()
         for part in (lexical, *lexical.parents):
-            if part.is_symlink() or part.is_junction():
-                raise ValueError("Appearance preference path contains a symlink or junction.")
+            try:
+                metadata = os.lstat(part)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ValueError("Appearance preference path contains a symlink.")
+            if os.name == "nt":
+                attributes = getattr(metadata, "st_file_attributes", None)
+                if attributes is None:
+                    raise ValueError("Appearance preference path reparse metadata is unavailable.")
+                # Junctions and other reparse points can redirect a Windows path.
+                if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    raise ValueError("Appearance preference path contains a junction or reparse point.")
         resolved = lexical.resolve()
         roots = self.protected_roots + ((Path(repository).expanduser().resolve(),)
                                         if repository else ())

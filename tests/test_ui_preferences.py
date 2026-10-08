@@ -1,8 +1,12 @@
 import json
+import os
 from pathlib import Path
+import stat
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from src.ui.preferences import AppearancePreferences
 
@@ -38,11 +42,13 @@ class AppearancePreferenceTests(unittest.TestCase):
     def test_corrupt_oversize_and_lifecycle_payloads_fail_to_system(self):
         self.path.parent.mkdir()
         for payload in ('{', 'x' * 4097, '{"appearance":"Blue"}',
-                        '{"appearance":"Dark","authorization":"forged"}', '[]', '\xff'):
+                        '{"appearance":"Dark","authorization":"forged"}', '[]'):
             self.path.write_bytes(payload.encode('utf-8'))
             mode, error = self.store.load()
             self.assertEqual("System", mode)
             self.assertIsNotNone(error)
+        self.path.write_bytes(b'\xff')
+        self.assertEqual('System', self.store.load()[0])
 
     def test_unreadable_file_and_failed_save_are_nonfatal_and_preserve_old_bytes(self):
         self.store.save("Light")
@@ -77,10 +83,45 @@ class AppearancePreferenceTests(unittest.TestCase):
         self.assertEqual(Path.home() / '.prototype' / 'ui-v1' / 'preferences.json', fallback.path)
 
     def test_junction_guard_and_cleanup_failure_remain_nonfatal(self):
-        with patch.object(Path, 'is_junction', return_value=True):
+        original_lstat = os.lstat
+        def reparse_on_preference_path(path):
+            if Path(path) == self.path:
+                return SimpleNamespace(st_mode=stat.S_IFDIR,
+                    st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            return original_lstat(path)
+        with patch('src.ui.preferences.os.lstat', side_effect=reparse_on_preference_path):
             self.assertIn('junction', self.store.save('Dark'))
             self.assertEqual('System', self.store.load()[0])
         self.store.save('Light')
         with patch('src.ui.preferences.os.replace', side_effect=PermissionError('replace denied')), \
              patch.object(Path, 'unlink', side_effect=PermissionError('cleanup denied')):
             self.assertIn('replace denied', self.store.save('Dark'))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows junctions require Windows')
+    def test_real_windows_junction_is_rejected_without_touching_target(self):
+        marker = self.repo / 'marker.txt'
+        marker.write_text('untouched')
+        alias = self.root / 'junction'
+        created = subprocess.run(['cmd', '/c', 'mklink', '/J', str(alias), str(self.repo)],
+                                 capture_output=True, text=True)
+        if created.returncode:
+            self.skipTest(f'Junction creation unavailable: {created.stderr.strip()}')
+        try:
+            store = AppearancePreferences(path=alias / 'preferences.json')
+            self.assertIn('junction', store.load()[1])
+            self.assertIn('junction', store.save('Dark'))
+            self.assertFalse((self.repo / 'preferences.json').exists())
+        finally:
+            os.rmdir(alias)  # Removes only the junction, never its target.
+        self.assertEqual('untouched', marker.read_text())
+
+    def test_filesystem_inspection_failure_is_nonfatal_and_fails_closed(self):
+        with patch('src.ui.preferences.os.lstat', side_effect=PermissionError('inspection denied')):
+            self.assertIn('inspection denied', self.store.load()[1])
+            self.assertIn('inspection denied', self.store.save('Dark'))
+        self.assertFalse(self.path.parent.exists())
+        if os.name == 'nt':
+            with patch('src.ui.preferences.os.lstat',
+                       return_value=SimpleNamespace(st_mode=stat.S_IFDIR)):
+                self.assertIn('metadata is unavailable', self.store.load()[1])
+                self.assertIn('metadata is unavailable', self.store.save('Dark'))
