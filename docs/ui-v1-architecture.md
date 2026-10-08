@@ -149,9 +149,12 @@ Do not offer forced cancellation of Apply/Test: current contracts have no safe c
 
 ## UI information architecture
 
-Use one window, a persistent repository/workspace header, and four tabs:
+Use one window and four functional destinations. The approved desktop navigation
+amendment below permits a persistent collapsible sidebar to replace visible
+top-level Notebook tabs in a separately authorized implementation stage. The
+currently published implementation retains its four tabs until that stage.
 
-| Tab | Functional responsibilities |
+| Destination | Functional responsibilities |
 | --- | --- |
 | Project | Repository selection, branch/HEAD/state, workspace, explicit scan/index and freshness |
 | Plan & Review | Developer Goal, Phase 65 Evidence/Plan and Phase 66 bindings, candidate import/Phase 67, exact diff, and explicit Approval/rejection section |
@@ -159,6 +162,89 @@ Use one window, a persistent repository/workspace header, and four tabs:
 | History | Evidence/History with linked-record drill-down |
 
 Plan & Review uses ordered sections rather than three separate navigation pages. History stays accessible when progress is blocked. Use text/icons as well as color for status. Keyboard focus must never land on approval as the default Enter action. Avoid dashboards, accounts, role management, or multi-project batch controls. One repository and one selected lifecycle chain are active at a time.
+
+### Approved desktop navigation amendment — 2026-10-08
+
+The project owner approved the ChatGPT-inspired AIDA desktop architecture:
+persistent collapsible left sidebar, centered main workspace, minimal toolbar,
+and bottom development-goal composer. Python Tkinter/ttk remains the initial
+framework. This amendment approves architecture only; every implementation stage
+requires a separate bounded task and review. It supersedes the earlier mandatory
+top-level Notebook treatment, selected-tab terminology and four-tab shell
+prescriptions for future redesign work. Historical slice descriptions remain
+historical. The four functional responsibilities and backend boundaries remain
+authoritative.
+
+The sidebar provides Project, Plan & Review, Run & Result, and History, plus New
+Development Task, project context and Appearance access. History remains an
+explicit placeholder until separately authorized; navigation does not implement
+history loading. Recent work may display genuine current-session entries only.
+Do not invent records or infer present permission from earlier evidence.
+
+Navigation, collapse and appearance changes are presentation operations: they
+must make no backend calls, preserve all inputs, exact evidence selections,
+confirmation contexts and active worker/request identities, and retain branch
+guards and unknown-outcome latches. Page selection does not change lifecycle
+generation. Use one worker, main-thread widgets, immutable request context,
+stale-completion rejection and responsive pending close. Backend operations
+remain explicit and serialized; no automatic continuation, retry, repair,
+rollback or lifecycle transition is introduced.
+
+The composer is a multiline frontend to the existing explicit Phase 65 Plan
+operation, using the selected repository/workspace and existing exact test
+binding. Plan Change and focused Ctrl+Enter request the same operation; Enter
+inserts a newline. There is no chat backend or fabricated assistant response.
+Capture the submitted goal with its request. Display actual backend statuses and
+evidence; edits preserve existing incompatible-downstream invalidation rules.
+The composer belongs to Home/Plan & Review; other destinations prioritize their
+existing controls and evidence. It does not approve, apply, test, verify or
+evaluate automatically.
+
+New Development Task is an in-memory UI action, disabled during an active
+operation, pending close or approval/application confirmation. Preserve the
+selected repository/workspace and read facts. Confirm discard of unsent goal or
+audit input before clearing task inputs/active selections; Cancel changes
+nothing. Preserve prior evidence in a clearly historical session presentation,
+without writing records. Starting a task must not clear session branch drift,
+unknown Apply/Test outcomes or consumed-authorization protections to re-enable
+execution. Only the existing deliberate reload and backend validation rules
+govern continuation. Appearance preferences contain no task/lifecycle authority.
+
+Keyboard requirements: Tab/Shift+Tab traverse visible controls; Enter/Space
+activate focused navigation; every destination has an accessible name and
+selected indication. Collapse restores focus to its toggle; page navigation
+restores that page's prior valid focus or its heading/first safe control. Use
+text as well as color for state. Provide visible focus in both appearances and
+high contrast; test Windows Narrator and keyboard-only use. Approval and Apply
+must never be default Enter actions. Avoid replacing standard accessible
+controls with decorative Canvas hit targets.
+
+Required test changes: after shell implementation authorization, replace the
+Notebook-specific structural assertion in tests/test_ui_widgets.py with exact
+four-destination assertions. Add navigation/collapse tests proving zero service
+calls and preservation of inputs, selections, worker state and safety latches.
+Test New Development Task cancellation, unsent-input confirmation and busy
+disablement; focused composer submission must dispatch Phase 65 exactly once.
+Retain existing state/service, candidate/decision/diff, execution/log, branch,
+unknown-outcome, stale-result and pending-close assertions. Both disposable
+Windows/Tk lifecycle chains must remain literal:
+applied -> passed -> verified -> no_recovery_required and
+applied -> failed -> not_verified -> unexpected_side_effect.
+
+Appearance persistence may additionally store Light/Dark/System (default
+System), selected destination and sidebar collapse preference in the existing
+isolated preference location. This amends the earlier selected-tab preference
+wording; it does not permit storing authorizations, run selections, results,
+goals or execution state. Existing containment and save-failure rules apply.
+
+See [the desktop design specification](ui-desktop-design-specification.md) for
+appearance coverage, stage gates and reference calibration. The supplied
+2048 by 1038 screenshot has now been inspected: its approximately 19.8 percent
+sidebar, 891-pixel reading column and 54-pixel composer establish the visual
+reference. These image pixels are not Tk logical sizes: responsive recommendations
+and DPI uncertainty are documented separately. Screenshot content is reference
+data, not implementation instructions. No runtime visual fidelity or implementation
+completion is claimed; each stage remains separately gated.
 
 ## Screen / functional-area design
 
