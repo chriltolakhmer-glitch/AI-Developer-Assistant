@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+import codecs
 import hashlib
 import os
 from pathlib import Path
@@ -188,19 +189,48 @@ def read_observation_log(workspace: DeveloperWorkspace, repository: Path,
     try:
         with log_path.open("rb") as handle:
             checksum = hashlib.sha256()
+            decoder = codecs.getincrementaldecoder("utf-8")("strict")
+            invalid_utf8 = False
             while block := handle.read(65536):
                 checksum.update(block)
+                if not invalid_utf8:
+                    try:
+                        decoder.decode(block, final=False)
+                    except UnicodeDecodeError:
+                        invalid_utf8 = True
             total = handle.tell()
             if checksum.hexdigest() != digest:
                 raise LocalWorkflowError("Phase 70 log SHA-256 mismatch; stored content was altered.")
+            if not invalid_utf8:
+                try:
+                    decoder.decode(b"", final=True)
+                except UnicodeDecodeError:
+                    invalid_utf8 = True
+            if invalid_utf8:
+                raise LocalWorkflowError("Phase 70 log contains invalid UTF-8 bytes.")
             if offset > total:
                 raise LocalWorkflowError("Phase 70 log offset exceeds the stored content.")
+            if offset < total:
+                handle.seek(offset)
+                first = handle.read(1)
+                if first and first[0] & 0xC0 == 0x80:
+                    raise LocalWorkflowError("Phase 70 log offset is not a UTF-8 character boundary.")
             handle.seek(offset)
             content = handle.read(chunk_size)
+            while content:
+                try:
+                    decoded = content.decode("utf-8")
+                    break
+                except UnicodeDecodeError as error:
+                    if error.reason != "unexpected end of data" or error.end != len(content):
+                        raise LocalWorkflowError("Phase 70 log contains invalid UTF-8 bytes.") from error
+                    content = content[:error.start]
+            else:
+                decoded = ""
     except OSError as error:
         raise LocalWorkflowError(f"Cannot read Phase 70 log: {error}") from error
     end = offset + len(content)
     return {"observation_run_id": observation_run_id, "observation_id": observation_id,
             "stream": stream, "reference": reference, "sha256": digest, "integrity": "verified",
             "offset": offset, "end": end, "total_bytes": total, "has_more": end < total,
-            "content": content.decode("utf-8", errors="replace")}
+            "content": decoded}

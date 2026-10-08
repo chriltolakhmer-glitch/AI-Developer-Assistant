@@ -83,8 +83,11 @@ class ViewState:
     evaluation_result: dict[str, Any] | None = None
     operation_error: str | None = None
     apply_outcome_uncertain: bool = False
+    branch_context_invalidated: bool = False
+    test_request_state: str = "not_requested"
+    test_request_execution_run_id: str = ""
     applied_authorization_run_id: str = ""
-    pending_apply: tuple[int, str, str, str] | None = None
+    pending_apply: tuple[int, str, str, str, str] | None = None
     log_result: dict[str, Any] | None = None
     log_error: str | None = None
     _active: ReadRequest | None = field(default=None, repr=False)
@@ -111,6 +114,8 @@ class ViewState:
         self.evaluation_result = None
         self.operation_error = None
         self.apply_outcome_uncertain = False
+        self.test_request_state = "not_requested"
+        self.test_request_execution_run_id = ""
         self.applied_authorization_run_id = ""
         self.pending_apply = None
         self.log_result = None
@@ -127,6 +132,9 @@ class ViewState:
             return
         self.generation += 1
         setattr(self, field, run_id)
+        if kind == 'execution' and run_id and run_id != self.test_request_execution_run_id:
+            self.test_request_state = 'not_requested'
+            self.test_request_execution_run_id = ''
         self.operation_error = None
         if kind != 'verification':
             self.log_result = None
@@ -204,6 +212,7 @@ class ViewState:
         if (repository, workspace) != (self.repository, self.workspace):
             self.generation += 1
             self.repository, self.workspace = repository, workspace
+            self.branch_context_invalidated = False
             self.facts, self.error = None, None
             self.scan_result = self.index_result = self.test_catalog = self.plan_result = None
             self.selected_tests = ()
@@ -239,7 +248,8 @@ class ViewState:
                         *, log_stream: str = "", log_offset: int = 0) -> ReadRequest | None:
         if operation == "read_repository":
             return self.begin(repository, workspace)
-        if (self.loading or self.close_pending or (self.pending_approval and operation != 'decide_approve')
+        if (self.loading or self.close_pending or self.branch_context_invalidated
+                or (self.pending_approval and operation != 'decide_approve')
                 or (self.pending_apply and operation != 'apply')):
             return None
         if operation not in {"scan", "index", "catalog_tests", "plan", "import_candidate",
@@ -267,7 +277,8 @@ class ViewState:
             verification = self.verification_result or {}
             eligible = {
                 'apply': bool(self.pending_apply == (self.generation, repository, workspace,
-                                self.selected_authorization_run_id) and self.selected_authorization_run_id
+                                self.selected_authorization_run_id, self.branch_reference(self.facts))
+                              and self.selected_authorization_run_id
                               and decision.get('run_id') == self.selected_authorization_run_id
                               and decision.get('decision') == 'approve'
                               and decision.get('execution_authorized') is True
@@ -276,7 +287,8 @@ class ViewState:
                               and not self.apply_outcome_uncertain
                               and self.applied_authorization_run_id != self.selected_authorization_run_id),
                 'test': bool(self.selected_execution_run_id and application.get('run_id') == self.selected_execution_run_id
-                             and application.get('status') == 'applied' and not self.observation_result),
+                             and application.get('status') == 'applied' and not self.observation_result
+                             and self.test_request_state == 'not_requested'),
                 'verify': bool(self.selected_execution_run_id and application.get('run_id') == self.selected_execution_run_id
                                and self.selected_observation_run_id and observation.get('run_id') == self.selected_observation_run_id
                                and not self.verification_result),
@@ -288,6 +300,9 @@ class ViewState:
                 return None
             self.operation_error = None
             self.pending_apply = None
+            if operation == 'test':
+                self.test_request_state = 'in_progress'
+                self.test_request_execution_run_id = self.selected_execution_run_id
         if operation in {'review_patch', 'review_approval', 'decide_approve', 'decide_reject'}:
             if not self.selected_patch_run_id or self.selected_patch_run_id != (self.candidate_result or {}).get('run_id'):
                 self.clear_review()
@@ -356,8 +371,14 @@ class ViewState:
             return True
         if request.operation in {'apply', 'test', 'verify', 'evaluate'}:
             self.operation_error = error
-            if request.operation == 'apply' and error:
+            branch_mismatch = bool(error and error.startswith('LocalWorkflowError: SessionBranchMismatch:'))
+            if branch_mismatch:
+                self.branch_context_invalidated = True
+            if request.operation == 'apply' and error and not branch_mismatch:
                 self.apply_outcome_uncertain = True
+            if request.operation == 'test':
+                self.test_request_state = ('observation_returned' if facts is not None else
+                                           'blocked_before_dispatch' if branch_mismatch else 'outcome_unknown')
             if request.operation == 'apply' and facts is not None and facts.get('status') == 'applied':
                 self.applied_authorization_run_id = request.authorization_run_id
             if facts is not None:
@@ -390,4 +411,5 @@ class ViewState:
         if facts is not None:
             self.repository = facts["repository_path"]
             self.workspace = facts["workspace_path"]
+            self.branch_context_invalidated = False
         return True

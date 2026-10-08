@@ -107,6 +107,8 @@ class ShellView:
         log_text_frame.columnconfigure(0, weight=1)
         log_text_frame.rowconfigure(0, weight=1)
         self._log_navigation = None
+        self._log_stream = None
+        self._log_offsets = [0]
         self.project.columnconfigure(1, weight=1)
         self.repository = tk.StringVar(root)
         self.workspace = tk.StringVar(root)
@@ -415,7 +417,8 @@ class ShellView:
         draft = (review or {}).get('draft', {})
         shown = {'repository_path': context[1], 'current_head': (facts or {}).get('head'),
                  'approved_head': decision.get('current_commit'), 'authorization_id': decision.get('authorization_id'),
-                 'authorization_run_id': context[3], 'source_patch_id': decision.get('source_patch_id'),
+                 'authorization_run_id': context[3], 'session_branch_reference': context[4],
+                 'source_patch_id': decision.get('source_patch_id'),
                  'patch_sha256': decision.get('patch_sha256'), 'candidate_paths': draft.get('candidate_paths'),
                  'candidate_symbol_scope': draft.get('candidate_symbol_scope'),
                  'approved_by': decision.get('approved_by'), 'approval_record': decision}
@@ -439,7 +442,16 @@ class ShellView:
         row = self._log_navigation
         if row is None:
             return
-        offset = row['end'] if forward else max(0, row['offset'] - 65536)
+        if self._log_stream != row['stream']:
+            self._log_stream, self._log_offsets = row['stream'], [row['offset']]
+        if forward:
+            offset = row['end']
+            if offset != row['offset']:
+                self._log_offsets.append(offset)
+        else:
+            if len(self._log_offsets) > 1:
+                self._log_offsets.pop()
+            offset = self._log_offsets[-1]
         self.show_log(row['stream'], offset)
 
     def _render_run(self, state):
@@ -460,7 +472,12 @@ class ShellView:
             if index == 0:
                 heading += 'Approval permits only exact patch application.\n'
             elif index == 1:
-                heading += 'PATCH APPLIED — TESTS NOT YET EXECUTED\n' if application.get('status') == 'applied' and not observation else ''
+                if application.get('status') == 'applied' and state.test_request_state == 'not_requested':
+                    heading += 'PATCH APPLIED — TESTS NOT YET EXECUTED\n'
+                elif state.test_request_state == 'outcome_unknown':
+                    heading += 'TEST EXECUTION OUTCOME UNKNOWN — INSPECT EVIDENCE\n'
+                elif state.test_request_state == 'blocked_before_dispatch':
+                    heading += 'TESTS NOT STARTED — SESSION BRANCH CHANGED\n'
                 bound = (state.review_result or {}).get('bound_tests')
                 heading += 'Bound Phase 65 test identities: ' + json.dumps(bound if bound is not None else 'unavailable', ensure_ascii=False) + '\n'
                 heading += 'Phase 70 runs the selected unittest methods with the current local user’s privileges. It is not an operating-system sandbox.\n'
@@ -470,7 +487,11 @@ class ShellView:
                 heading += ('Running Phase 69 application…', 'Running Phase 70 bound tests…',
                             'Running Phase 71 verification…', 'Running Phase 72 recovery evaluation…', '')[index] + '\n'
             if state.operation_error and state.operation == ('apply', 'test', 'verify', 'evaluate', '')[index]:
-                heading += 'Backend error: ' + state.operation_error + '\nFinal persistence or execution status may require evidence inspection.\n'
+                heading += 'Backend error: ' + state.operation_error + '\n'
+                if not state.operation_error.startswith('LocalWorkflowError: SessionBranchMismatch:'):
+                    heading += 'Final persistence or execution status may require evidence inspection.\n'
+            if state.branch_context_invalidated:
+                heading += 'Session branch context changed. Reload the repository before continuing.\n'
             self._replace_text(detail, heading + self._row_text(record))
             if button:
                 eligible = (bool(selected[0] and decision.get('decision') == 'approve' and
@@ -479,10 +500,12 @@ class ShellView:
                                  decision.get('executed') is False and not state.application_result
                                  and not state.apply_outcome_uncertain
                                  and state.applied_authorization_run_id != selected[0]),
-                            bool(selected[1] and application.get('status') == 'applied' and not state.observation_result),
+                            bool(selected[1] and application.get('status') == 'applied' and not state.observation_result
+                                 and state.test_request_state == 'not_requested'),
                             bool(selected[1] and selected[2] and not state.verification_result),
                             bool(selected[3] and not state.evaluation_result))[index]
-                button.configure(state='normal' if eligible and not state.loading and not state.close_pending else 'disabled')
+                button.configure(state='normal' if eligible and not state.loading and not state.close_pending
+                                 and not state.branch_context_invalidated else 'disabled')
         if self.apply_confirmation and state.pending_apply is None:
             self.dismiss_apply_confirmation()
         log = state.log_result

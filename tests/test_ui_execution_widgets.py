@@ -10,6 +10,96 @@ from tests.test_ui_decision_widgets import DecisionWidgetFixture
 
 
 class ExecutionWidgetTests(DecisionWidgetFixture):
+    def authorize(self):
+        self.draft()
+        self.confirmation()
+        self.app.view.confirm_button.invoke()
+        self.wait(lambda: not self.app.state.loading)
+        return self.app.state.decision_result
+
+    def test_same_head_branch_switch_before_apply_confirmation_blocks_mutation(self):
+        approval = self.authorize()
+        self.app.view.selected_authorization.set(approval['run_id']); self.app.inputs_changed()
+        old_head = self.git('rev-parse', 'HEAD')
+        self.git('branch', 'same-head')
+        self.git('switch', 'same-head')
+        self.assertEqual(old_head, self.git('rev-parse', 'HEAD'))
+        before = (self.repo / 'app.py').read_bytes()
+        with patch('src.developer.patch_application.apply_approved_patch',
+                   side_effect=AssertionError('Phase 69 must not be dispatched')) as apply:
+            self.app.view.apply_button.invoke()
+            self.assertIsNotNone(self.app.view.apply_confirmation)
+            self.app.confirm_apply(self.app.state.pending_apply)
+            self.wait(lambda: not self.app.state.loading)
+        apply.assert_not_called()
+        self.assertIsNone(self.app.state.application_result)
+        self.assertFalse(self.app.state.apply_outcome_uncertain)
+        self.assertTrue(self.app.state.branch_context_invalidated)
+        self.assertIn('SessionBranchMismatch', self.app.state.operation_error)
+        self.assertEqual(before, (self.repo / 'app.py').read_bytes())
+
+    def test_same_head_branch_switch_after_apply_confirmation_blocks_dispatch(self):
+        approval = self.authorize()
+        self.app.view.selected_authorization.set(approval['run_id']); self.app.inputs_changed()
+        old_head = self.git('rev-parse', 'HEAD')
+        self.app.view.apply_button.invoke()
+        self.assertIsNotNone(self.app.view.apply_confirmation)
+        self.git('branch', 'same-head')
+        self.git('switch', 'same-head')
+        self.assertEqual(old_head, self.git('rev-parse', 'HEAD'))
+        before = (self.repo / 'app.py').read_bytes()
+        with patch('src.developer.patch_application.apply_approved_patch',
+                   side_effect=AssertionError('Phase 69 must not be dispatched')) as apply:
+            self.app.confirm_apply(self.app.state.pending_apply)
+            self.wait(lambda: not self.app.state.loading)
+        apply.assert_not_called()
+        self.assertIsNone(self.app.state.application_result)
+        self.assertTrue(self.app.state.branch_context_invalidated)
+        self.assertIn('SessionBranchMismatch', self.app.state.operation_error)
+        self.assertEqual(before, (self.repo / 'app.py').read_bytes())
+
+    def test_same_head_branch_guard_precedes_test_verify_and_evaluate(self):
+        original = self.git('rev-parse', 'HEAD')
+        self.git('branch', 'same-head')
+        self.assertEqual(original, self.git('rev-parse', 'same-head'))
+        service = self.service
+        cases = (
+            ('test', lambda: service.test(str(self.repo), str(self.workspace_path), 'execution-run',
+                                           expected_branch='refs/heads/same-head'),
+             'src.developer.test_execution.execute_applied_patch_tests'),
+            ('verify', lambda: service.verify(str(self.repo), str(self.workspace_path), 'execution-run',
+                                               'observation-run', expected_branch='refs/heads/same-head'),
+             'src.developer.execution_verification.verify_execution'),
+            ('evaluate', lambda: service.evaluate(str(self.repo), str(self.workspace_path), 'verification-run',
+                                                   expected_branch='refs/heads/same-head'),
+             'src.developer.recovery_evaluation.evaluate_recovery'),
+        )
+        for phase, invoke, target in cases:
+            with self.subTest(phase=phase), patch(target, side_effect=AssertionError('backend dispatched')) as backend:
+                with self.assertRaisesRegex(LocalWorkflowError, 'branch context changed'):
+                    invoke()
+                backend.assert_not_called()
+
+    def test_phase70_exception_latches_unknown_and_preserves_application(self):
+        self.app.state.application_result = {'run_id': 'execution-run', 'status': 'applied'}
+        self.app.view.selected_execution.set('execution-run')
+        self.app.inputs_changed()
+        with patch.object(self.service, 'test', side_effect=RuntimeError('preflight unavailable')) as test:
+            self.assertEqual('normal', str(self.app.view.test_button.cget('state')))
+            self.app.view.test_button.invoke()
+            self.wait(lambda: not self.app.state.loading)
+            test.assert_called_once()
+            self.assertEqual('outcome_unknown', self.app.state.test_request_state)
+            self.assertIsNone(self.app.state.observation_result)
+            self.assertEqual('execution-run', self.app.state.application_result['run_id'])
+            text = self.app.view.run_sections[1][1].get('1.0', 'end')
+            self.assertIn('TEST EXECUTION OUTCOME UNKNOWN — INSPECT EVIDENCE', text)
+            self.assertNotIn('PATCH APPLIED — TESTS NOT YET EXECUTED', text)
+            self.assertIn('RuntimeError: preflight unavailable', text)
+            self.assertEqual('disabled', str(self.app.view.test_button.cget('state')))
+            self.app.view.test_button.invoke()
+            test.assert_called_once()
+
     def test_log_integrity_error_is_visible_without_content(self):
         self.app.state.observation_result = {'run_id': 'selected-observation', 'status': 'passed'}
         self.app.state.selected_observation_run_id = 'selected-observation'
@@ -45,6 +135,31 @@ class ExecutionWidgetTests(DecisionWidgetFixture):
             self.app.view.previous_log_button.invoke(); self.wait(lambda: not self.app.state.loading)
             self.assertEqual(65536, len(self.app.view.log_text.get('1.0', 'end-1c')))
             self.assertEqual([0, 65536, 0], [call.args[-1] for call in read.call_args_list])
+
+    def test_log_navigation_reconstructs_multibyte_boundary_without_skipping_bytes(self):
+        self.app.state.observation_result = {'run_id': 'selected-observation', 'status': 'passed'}
+        self.app.state.selected_observation_run_id = 'selected-observation'
+        self.app.view.render(self.app.state)
+        content = b'a' * 65535 + '€'.encode('utf-8') + b'end'
+        def chunk(_repo, _workspace, run_id, stream, offset):
+            self.assertEqual(('selected-observation', 'stdout'), (run_id, stream))
+            end = 65535 if offset == 0 else len(content)
+            raw = content[offset:end]
+            return {'observation_run_id': run_id, 'observation_id': 'observation-' + 'a' * 20,
+                    'stream': stream, 'reference': 'canonical external reference', 'sha256': 'b' * 64,
+                    'integrity': 'verified', 'offset': offset, 'end': end, 'total_bytes': len(content),
+                    'has_more': end < len(content), 'content': raw.decode('utf-8')}
+        with patch.object(self.service, 'read_log', side_effect=chunk) as read, \
+             patch.object(self.service, 'test', side_effect=AssertionError('viewer ran tests')):
+            self.app.view.stdout_button.invoke(); self.wait(lambda: not self.app.state.loading)
+            first = self.app.view.log_text.get('1.0', 'end-1c')
+            self.app.view.next_log_button.invoke(); self.wait(lambda: not self.app.state.loading)
+            second = self.app.view.log_text.get('1.0', 'end-1c')
+            self.assertTrue(second.startswith('€'))
+            self.app.view.previous_log_button.invoke(); self.wait(lambda: not self.app.state.loading)
+            self.assertEqual(first, self.app.view.log_text.get('1.0', 'end-1c'))
+            self.assertEqual([0, 65535, 0], [call.args[-1] for call in read.call_args_list])
+            self.assertEqual(content.decode('utf-8'), first + second)
 
     def test_windows_public_backend_passing_chain_uses_exact_evidence(self):
         target_test = self.repo / 'tests' / 'test_app.py'
@@ -95,7 +210,8 @@ class ExecutionWidgetTests(DecisionWidgetFixture):
             self.wait(lambda: not self.app.state.loading)
             execution = self.app.state.application_result
             self.assertEqual('applied', execution['status'])
-            apply.assert_called_once_with(self.app.state.repository, self.app.state.workspace, approval['run_id'])
+            apply.assert_called_once_with(self.app.state.repository, self.app.state.workspace, approval['run_id'],
+                                          expected_branch='refs/heads/main')
             test.assert_not_called(); verify.assert_not_called(); evaluate.assert_not_called()
             self.assertEqual(head_before, self.git('rev-parse', 'HEAD'))
             self.assertEqual(refs_before, self.git('show-ref'))
@@ -116,7 +232,8 @@ class ExecutionWidgetTests(DecisionWidgetFixture):
             self.assertEqual(bound, observation['test_identities'])
             self.assertFalse(observation['unexpected_repository_changes'])
             self.assertEqual([], observation['unexpected_changed_paths'])
-            test.assert_called_once_with(self.app.state.repository, self.app.state.workspace, execution['run_id'])
+            test.assert_called_once_with(self.app.state.repository, self.app.state.workspace, execution['run_id'],
+                                         expected_branch='refs/heads/main')
             self.assertEqual((), backend_test.call_args.kwargs['tests'])
             verify.assert_not_called(); evaluate.assert_not_called()
             self.app.view.selected_observation.set(observation['run_id']); self.app.inputs_changed()
@@ -135,14 +252,15 @@ class ExecutionWidgetTests(DecisionWidgetFixture):
             verification = self.app.state.verification_result
             self.assertEqual('verified', verification['status'])
             verify.assert_called_once_with(self.app.state.repository, self.app.state.workspace,
-                                           execution['run_id'], observation['run_id'])
+                                           execution['run_id'], observation['run_id'],
+                                           expected_branch='refs/heads/main')
             evaluate.assert_not_called()
             self.app.view.selected_verification.set(verification['run_id']); self.app.inputs_changed()
             self.app.view.evaluate_button.invoke(); self.wait(lambda: not self.app.state.loading)
             evaluation = self.app.state.evaluation_result
             self.assertEqual('no_recovery_required', evaluation['classification'])
             evaluate.assert_called_once_with(self.app.state.repository, self.app.state.workspace,
-                                             verification['run_id'])
+                                             verification['run_id'], expected_branch='refs/heads/main')
             self.assertFalse(evaluation['retry_eligible'])
             self.assertFalse(evaluation['rollback_performed'])
             self.assertFalse(evaluation['source_mutation_performed'])
@@ -218,24 +336,28 @@ class ExecutionWidgetTests(DecisionWidgetFixture):
             self.app.view.apply_button.invoke()
             self.app.confirm_apply(self.app.state.pending_apply)
             self.wait(lambda: not self.app.state.loading)
-            apply.assert_called_once_with(self.app.state.repository, self.app.state.workspace, decision['run_id'])
+            apply.assert_called_once_with(self.app.state.repository, self.app.state.workspace, decision['run_id'],
+                                          expected_branch='refs/heads/main')
             test.assert_not_called()
             self.assertEqual('execution-run', self.app.state.application_result['run_id'])
             self.app.view.selected_execution.set('execution-run')
             self.app.inputs_changed()
             self.app.view.test_button.invoke()
             self.wait(lambda: not self.app.state.loading)
-            test.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'execution-run')
+            test.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'execution-run',
+                                         expected_branch='refs/heads/main')
             verify.assert_not_called()
             self.app.view.selected_observation.set('observation-run')
             self.app.inputs_changed()
             self.app.view.verify_button.invoke()
             self.wait(lambda: not self.app.state.loading)
-            verify.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'execution-run', 'observation-run')
+            verify.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'execution-run', 'observation-run',
+                                           expected_branch='refs/heads/main')
             evaluate.assert_not_called()
             self.app.view.selected_verification.set('verification-run')
             self.app.inputs_changed()
             self.app.view.evaluate_button.invoke()
             self.wait(lambda: not self.app.state.loading)
-            evaluate.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'verification-run')
+            evaluate.assert_called_once_with(self.app.state.repository, self.app.state.workspace, 'verification-run',
+                                             expected_branch='refs/heads/main')
             self.assertIn('failed_tests', self.app.view.run_sections[4][1].get('1.0', 'end'))

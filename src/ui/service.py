@@ -73,20 +73,39 @@ class RepositoryService:
         return record_patch_decision(developer, root, patch_run_id,
                                      decision, approved_by=approved_by, note=note)
 
-    def apply(self, repository: str, workspace: str, authorization_run_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _guard_session_branch(repository: str, expected_branch: str) -> None:
+        from src.developer.ui_read import _git_read
+        from src.developer.local_workflow import LocalWorkflowError
+        root = Path(repository).expanduser().resolve(strict=True)
+        actual_branch = _git_read(root, "rev-parse", "--symbolic-full-name", "HEAD").decode(
+            "utf-8", errors="replace").strip()
+        if actual_branch != expected_branch:
+            raise LocalWorkflowError(
+                f"SessionBranchMismatch: repository branch context changed "
+                f"(expected {expected_branch!r}, found {actual_branch!r}); reload the session explicitly.")
+
+    def apply(self, repository: str, workspace: str, authorization_run_id: str,
+              *, expected_branch: str) -> dict[str, Any]:
+        self._guard_session_branch(repository, expected_branch)
         from src.developer.patch_application import apply_approved_patch
         return apply_approved_patch(self._workspace(workspace), Path(repository), authorization_run_id)
 
-    def test(self, repository: str, workspace: str, execution_run_id: str) -> dict[str, Any]:
+    def test(self, repository: str, workspace: str, execution_run_id: str,
+             *, expected_branch: str) -> dict[str, Any]:
+        self._guard_session_branch(repository, expected_branch)
         from src.developer.test_execution import execute_applied_patch_tests
         return execute_applied_patch_tests(self._workspace(workspace), Path(repository), execution_run_id, tests=())
 
     def verify(self, repository: str, workspace: str, execution_run_id: str,
-               observation_run_id: str) -> dict[str, Any]:
+               observation_run_id: str, *, expected_branch: str) -> dict[str, Any]:
+        self._guard_session_branch(repository, expected_branch)
         from src.developer.execution_verification import verify_execution
         return verify_execution(self._workspace(workspace), Path(repository), execution_run_id, observation_run_id)
 
-    def evaluate(self, repository: str, workspace: str, verification_run_id: str) -> dict[str, Any]:
+    def evaluate(self, repository: str, workspace: str, verification_run_id: str,
+                 *, expected_branch: str) -> dict[str, Any]:
+        self._guard_session_branch(repository, expected_branch)
         from src.developer.recovery_evaluation import evaluate_recovery
         return evaluate_recovery(self._workspace(workspace), Path(repository), verification_run_id)
 

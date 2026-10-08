@@ -17,8 +17,8 @@ class ObservationLogTests(CandidateFixture):
         draft = self.import_plan(plan)
         approval = self.service.decide(*self.args, patch_run_id=draft['run_id'],
                                        decision='approve', approved_by='fixture', note=None)
-        execution = self.service.apply(*self.args, approval['run_id'])
-        self.observation = self.service.test(*self.args, execution['run_id'])
+        execution = self.service.apply(*self.args, approval['run_id'], expected_branch='refs/heads/main')
+        self.observation = self.service.test(*self.args, execution['run_id'], expected_branch='refs/heads/main')
         self.workspace = self.service._workspace(str(self.workspace_path))
 
     def read(self, stream='stdout', run_id=None, offset=0):
@@ -97,3 +97,23 @@ class ObservationLogTests(CandidateFixture):
         self.assertGreater(len(chunks), 1)
         self.assertEqual(content.decode(), ''.join(chunks))
         self.assertEqual(len(content), row['total_bytes'])
+
+    def test_multibyte_character_at_chunk_boundary_is_preserved_without_byte_gaps(self):
+        content = b'a' * 65535 + '€'.encode('utf-8') + b'end'
+        Path(self.observation['stdout_reference']).write_bytes(content)
+        run_id = self.variant(stdout_sha256=hashlib.sha256(content).hexdigest())
+        first = self.read(run_id=run_id)
+        second = self.read(run_id=run_id, offset=first['end'])
+        self.assertEqual(65535, first['end'])
+        self.assertTrue(first['has_more'])
+        self.assertEqual('a' * 65535, first['content'])
+        self.assertTrue(second['content'].startswith('€'))
+        self.assertFalse(second['has_more'])
+        self.assertEqual(content, first['content'].encode('utf-8') + second['content'].encode('utf-8'))
+
+    def test_invalid_utf8_is_reported_after_byte_integrity_check(self):
+        content = b'valid-prefix\xffinvalid'
+        Path(self.observation['stdout_reference']).write_bytes(content)
+        run_id = self.variant(stdout_sha256=hashlib.sha256(content).hexdigest())
+        with self.assertRaisesRegex(LocalWorkflowError, 'invalid UTF-8'):
+            self.read(run_id=run_id)

@@ -71,8 +71,11 @@ class Application:
                     and decision.get('allowed_operation') == 'apply_exact_patch'
                     and decision.get('executed') is False and not self.state.application_result
                     and not self.state.apply_outcome_uncertain
+                    and not self.state.branch_context_invalidated
                     and self.state.applied_authorization_run_id != run_id):
-                self.state.pending_apply = (self.state.generation, self.state.repository, self.state.workspace, run_id)
+                branch_reference = self.state.branch_reference(self.state.facts)
+                self.state.pending_apply = (self.state.generation, self.state.repository, self.state.workspace,
+                                            run_id, branch_reference)
                 self.view.open_apply_confirmation(self.state.pending_apply, decision,
                                                   self.state.review_result, self.state.facts)
             self.view.render(self.state)
@@ -101,14 +104,18 @@ class Application:
                     approved_by=request.approved_by, note=request.note,
                     expected_branch=request.expected_branch if request.operation == 'decide_approve' else None)
             elif request.operation == 'apply':
-                facts = self.service.apply(request.repository, request.workspace, request.authorization_run_id)
+                facts = self.service.apply(request.repository, request.workspace, request.authorization_run_id,
+                                           expected_branch=request.expected_branch)
             elif request.operation == 'test':
-                facts = self.service.test(request.repository, request.workspace, request.execution_run_id)
+                facts = self.service.test(request.repository, request.workspace, request.execution_run_id,
+                                          expected_branch=request.expected_branch)
             elif request.operation == 'verify':
                 facts = self.service.verify(request.repository, request.workspace,
-                                            request.execution_run_id, request.observation_run_id)
+                                            request.execution_run_id, request.observation_run_id,
+                                            expected_branch=request.expected_branch)
             elif request.operation == 'evaluate':
-                facts = self.service.evaluate(request.repository, request.workspace, request.verification_run_id)
+                facts = self.service.evaluate(request.repository, request.workspace, request.verification_run_id,
+                                              expected_branch=request.expected_branch)
             elif request.operation == 'read_log':
                 facts = self.service.read_log(request.repository, request.workspace,
                                               request.observation_run_id, request.log_stream, request.log_offset)
