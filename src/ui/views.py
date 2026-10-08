@@ -2,7 +2,9 @@
 
 import tkinter as tk
 from tkinter import ttk
+import json
 
+from .formatters import TARGET_ROLES, format_plan, role_label
 from .state import ViewState
 
 
@@ -75,12 +77,42 @@ class ShellView:
         self.plan_button.pack(anchor="w", pady=6)
         self.plan_status = tk.StringVar(root)
         ttk.Label(self.plan, textvariable=self.plan_status, wraplength=880).pack(anchor="w")
-        self.plan_summary = tk.Text(self.plan, height=10, wrap="word", state="disabled")
-        self.plan_summary.pack(fill="both", expand=True)
-        ttk.Label(self.plan, text="Candidate validation and detailed evidence are available in later UI slices.").pack(anchor="w", pady=5)
+        self.plan_header = tk.StringVar(root, value="No plan selected.")
+        ttk.Label(self.plan, textvariable=self.plan_header, justify="left", wraplength=1000).pack(anchor="w", fill="x", pady=4)
+        self.raw_detail_button = ttk.Button(self.plan, text="View raw plan details", command=self.open_raw_plan)
+        self.raw_detail_button.pack(anchor="w", pady=2)
+        self._current_plan = None
+        self.raw_detail_window = None
+        target_frame = ttk.LabelFrame(self.plan, text="Implementation targets", padding=5)
+        target_frame.pack(fill="x", pady=4)
+        target_frame.columnconfigure(0, weight=1)
+        target_frame.columnconfigure(1, weight=2)
+        target_frame.rowconfigure(0, weight=1)
+        self.target_tree = ttk.Treeview(target_frame, columns=("role", "target"), show="headings", height=5)
+        self.target_tree.heading("role", text="Role")
+        self.target_tree.heading("target", text="File / qualified symbol")
+        self.target_tree.column("role", width=240, stretch=False)
+        self.target_tree.column("target", width=440, stretch=True)
+        self.target_tree.grid(row=0, column=0, sticky="nsew")
+        target_scroll = ttk.Scrollbar(target_frame, orient="vertical", command=self.target_tree.yview)
+        target_scroll.grid(row=0, column=0, sticky="nse")
+        self.target_tree.configure(yscrollcommand=target_scroll.set)
+        self.target_detail = tk.Text(target_frame, height=7, wrap="word", state="disabled")
+        self.target_detail.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self.target_tree.bind("<<TreeviewSelect>>", self._target_selected)
+        evidence_frame = ttk.LabelFrame(self.plan, text="Plan evidence", padding=5)
+        evidence_frame.pack(fill="both", expand=True, pady=4)
+        evidence_frame.rowconfigure(0, weight=1)
+        evidence_frame.columnconfigure(0, weight=1)
+        self.plan_summary = tk.Text(evidence_frame, height=12, wrap="word", state="disabled")
+        self.plan_summary.grid(row=0, column=0, sticky="nsew")
+        evidence_scroll = ttk.Scrollbar(evidence_frame, orient="vertical", command=self.plan_summary.yview)
+        evidence_scroll.grid(row=0, column=1, sticky="ns")
+        self.plan_summary.configure(yscrollcommand=evidence_scroll.set)
         self.controls = (self.repository_entry, self.workspace_entry, self.browse_repo_button,
                          self.open_button, self.browse_workspace_button, self.refresh_button,
                          self.scan_button, self.index_button, self.goal, self.catalog_button, self.tests, self.plan_button)
+        self.controls += (self.raw_detail_button,)
         self.repository.trace_add("write", lambda *_: inputs_changed())
         self.workspace.trace_add("write", lambda *_: inputs_changed())
         self.goal.bind("<<Modified>>", lambda *_: self._goal_changed(inputs_changed))
@@ -90,6 +122,161 @@ class ShellView:
         if self.goal.edit_modified():
             self.goal.edit_modified(False)
             callback()
+
+    @staticmethod
+    def _replace_text(widget, text):
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("1.0", text)
+        widget.configure(state="disabled")
+
+    def _target_selected(self, _event=None):
+        selection = self.target_tree.selection()
+        target = self._target_rows.get(selection[0]) if selection else None
+        self._replace_text(self.target_detail, self._row_text(target) if target else "Select a target to inspect its Phase 65 evidence.")
+
+    def open_raw_plan(self):
+        if self._current_plan is None:
+            return
+        if self.raw_detail_window is not None and self.raw_detail_window.winfo_exists():
+            self.raw_detail_window.lift()
+            return
+        window = tk.Toplevel(self.plan)
+        window.title("Read-only Phase 65 plan detail")
+        window.geometry("760x560")
+        window.rowconfigure(0, weight=1)
+        window.columnconfigure(0, weight=1)
+        detail = tk.Text(window, wrap="none", state="normal")
+        detail.grid(row=0, column=0, sticky="nsew")
+        vertical = ttk.Scrollbar(window, orient="vertical", command=detail.yview)
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal = ttk.Scrollbar(window, orient="horizontal", command=detail.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        detail.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        detail.insert("1.0", json.dumps(self._current_plan, ensure_ascii=False, indent=2, sort_keys=True))
+        detail.configure(state="disabled")
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_raw_plan(window))
+        self.raw_detail_window = window
+
+    def _close_raw_plan(self, window):
+        if window.winfo_exists():
+            window.destroy()
+        if self.raw_detail_window is window:
+            self.raw_detail_window = None
+
+    @staticmethod
+    def _row_text(row):
+        if not isinstance(row, dict):
+            return ""
+        return "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False, sort_keys=True)}"
+                         for key, value in row.items())
+
+    @staticmethod
+    def _section(title, rows):
+        lines = [title]
+        if not rows:
+            lines.append("  None recorded.")
+        for row in rows:
+            if isinstance(row, dict):
+                lines.append("  " + ShellView._row_text(row).replace("\n", "\n  "))
+            else:
+                lines.append("  " + json.dumps(row, ensure_ascii=False))
+            lines.append("")
+        return "\n".join(lines)
+
+    def _render_plan(self, plan):
+        if plan is not self._current_plan and self.raw_detail_window is not None:
+            self._close_raw_plan(self.raw_detail_window)
+        self._current_plan = plan
+        self.target_tree.delete(*self.target_tree.get_children())
+        self._target_rows = {}
+        if plan is None:
+            self.plan_header.set("No plan selected. Enter a goal and explicitly choose Plan change.")
+            self._replace_text(self.plan_summary, "Plan evidence appears here after an explicit Plan operation.")
+            self._replace_text(self.target_detail, "No target selected.")
+            return
+
+        evidence = format_plan(plan)
+        action = evidence["proposed_action"]
+        repository = evidence["repository"]
+        repository = repository if isinstance(repository, dict) else {}
+        impact = evidence["change_impact"]
+        repo_impact = impact.get("repository") if isinstance(impact.get("repository"), dict) else {}
+        freshness = evidence["index_freshness"]
+        tests = evidence["selected_tests"]
+        status = evidence["status"]
+        status_description = {
+            "completed": "Completed planning result",
+            "limited": "Planning result with insufficient evidence",
+            "manual_review_required": "Planning requires manual review",
+        }.get(status)
+        header_fields = [
+            f"Plan status: {status if status is not None else 'unavailable'}" +
+            (f" ({status_description})" if status_description else ""),
+            f"Goal: {evidence['goal'] if evidence['goal'] is not None else 'unavailable'}",
+            f"Phase 65 run ID: {evidence['run_id'] if evidence['run_id'] is not None else 'unavailable'}",
+            f"Phase 66 action ID: {action.get('action_id', 'unavailable')}",
+            f"Repository identity: {repo_impact.get('repository_id', repository.get('repository_id', 'unavailable'))}",
+            f"Recorded commit: {repo_impact.get('current_commit', 'unavailable')}",
+            f"Source snapshot: {repo_impact.get('working_tree_sha256', 'unavailable')}",
+            f"Index freshness: {freshness.get('status', 'unavailable')}",
+            f"Selected/bound existing tests: {len(tests)}",
+        ]
+        self.plan_header.set("\n".join(header_fields))
+
+        ordered_roles = [role for role in TARGET_ROLES if role in evidence["targets_by_role"]]
+        ordered_roles.extend(role for role in evidence["targets_by_role"] if role not in ordered_roles)
+        target_lines = ["Implementation targets - exact backend roles; counts are role-specific."]
+        for role in ordered_roles:
+            rows = evidence["targets_by_role"][role]
+            target_lines.append(f"{role_label(role)}: {len(rows)}")
+            for index, row in enumerate(rows):
+                target_id = f"{role}:{index}"
+                path = row.get("file_path", "unavailable")
+                symbol = row.get("qualified_symbol", "unavailable")
+                self._target_rows[target_id] = row
+                self.target_tree.insert("", "end", iid=target_id, values=(role_label(role), f"{path} :: {symbol}"))
+        sections = ["\n".join(target_lines)]
+
+        selection = evidence["test_selection"]
+        selection_rows = []
+        if isinstance(selection, dict):
+            selection_rows.append({key: selection[key] for key in selection if key != "evidence"})
+            selection_rows.extend(evidence["test_evidence"])
+            selection_rows.extend({"uncertainty": item} for item in evidence["test_uncertainty"])
+        sections.append(self._section("Existing test evidence", evidence["selected_tests"]))
+        sections.append("Selection status and binding evidence\n" + (self._section("Selection details", selection_rows) if selection_rows else "  No expected-test selection details recorded.\n"))
+        sections.append("  Existing regression evidence does not necessarily prove the new requested behavior.")
+
+        preserved = evidence["preserved_behavior"]
+        sections.append(self._section("Preserved behavior", preserved) if preserved else
+                        "Preserved behavior\n  No preserved behavior was established by current evidence.")
+        sections.append(self._section("Blocking / unresolved evidence", evidence["unresolved_evidence"]))
+        sections.append(self._section("Warnings / informational evidence", evidence["warnings"]))
+        if evidence["retained_leaf_proofs"]:
+            proof_intro = "Retained-leaf backend evidence\n  The parent container exceeded the context limit, but the exact affected leaf was retained and bound by backend evidence.\n"
+            sections.append(proof_intro + self._section("Retained-leaf proof details", evidence["retained_leaf_proofs"]))
+        else:
+            sections.append("Retained-leaf backend evidence\n  No recognized retained-leaf proof is present; warnings and unresolved evidence above show the backend records.")
+
+        steps = evidence["implementation_steps"]
+        sections.append("Proposed implementation steps - no source changes have been made.\n" +
+                        self._section("Ordered advisory steps", steps))
+        sections.append("Proposed Action\n" + self._row_text(action) +
+                        "\n\nThis is a review-only proposal contract. It is not approval or execution authority.")
+        proposed_scope = {key: action[key] for key in ("target_paths", "target_symbols") if key in action}
+        if proposed_scope:
+            sections.append("Proposed scope (from Phase 66)\n" + self._row_text(proposed_scope))
+        sections.append(self._section("Recommended validation (advisory; not executed)", evidence["recommended_validation"]))
+        sections.append(self._section("Limitations", evidence["limitations"]))
+        self._replace_text(self.plan_summary, "\n\n".join(sections))
+        children = self.target_tree.get_children()
+        if children:
+            self.target_tree.selection_set(children[0])
+            self.target_tree.focus(children[0])
+            self._target_selected()
+        else:
+            self._replace_text(self.target_detail, "No implementation targets were recorded.")
 
     def selected_test_ids(self):
         return tuple(self.catalog_ids[int(index)] for index in self.tests.curselection())
@@ -170,23 +357,4 @@ class ShellView:
             if identity in state.selected_tests:
                 self.tests.selection_set(index)
         self.plan_status.set(message)
-        summary = "No plan selected. Enter a goal and explicitly choose Plan change."
-        if state.plan_result is not None:
-            plan = state.plan_result
-            tests = plan["tests"]["selected_tests"]
-            summary = (f"Status: {plan['status']}\nRun: {plan['run_id']}\n"
-                       f"Proposal/action: {plan.get('proposed_action', {}).get('action_id', 'unavailable')}\n"
-                       f"Goal: {plan['goal']}\nPrimary targets: {sum(row['role'] == 'primary_target' for row in plan['implementation_targets'])}\n"
-                       f"Configuration targets: {sum(row['role'] == 'configuration_target' for row in plan['implementation_targets'])}\n"
-                       f"Affected/bound existing tests: {len(tests)}\n" + "\n".join(tests) +
-                       f"\nUnresolved items (backend): {len(plan['unresolved_evidence'])}\n" +
-                       ", ".join(row['type'] for row in plan['unresolved_evidence']) +
-                       f"\nWarnings: {len(plan.get('warnings', []))}\n" +
-                       ", ".join(row['type'] for row in plan.get('warnings', [])) +
-                       f"\nIndex freshness: {plan['change_impact']['index_freshness']['status']}")
-            if plan["status"] == "completed":
-                summary += "\nReady for candidate validation in a later UI slice."
-        self.plan_summary.configure(state="normal")
-        self.plan_summary.delete("1.0", "end")
-        self.plan_summary.insert("1.0", summary)
-        self.plan_summary.configure(state="disabled")
+        self._render_plan(state.plan_result)

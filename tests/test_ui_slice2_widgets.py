@@ -51,11 +51,44 @@ class UISlice2WidgetTests(GitFixture):
         self.window.update()
 
     def plan_payload(self, status='completed'):
-        return dict(status=status, run_id='exact-plan-run', goal='goal', proposed_action={'action_id': 'exact-action'},
-                    implementation_targets=[{'role': 'primary_target'}, {'role': 'configuration_target'},
-                                            {'role': 'related_target'}], tests={'selected_tests': [self.identity]},
-                    unresolved_evidence=[{'type': 'human_check'}], warnings=[{'type': 'visible_warning'}],
-                    change_impact={'index_freshness': {'status': 'current'}})
+        return dict(status=status, run_id='exact-plan-run', goal='goal',
+                    repository={'repository_id': 'exact-repository'},
+                    proposed_action={'action_id': 'exact-action', 'status': 'proposed',
+                                     'action_type': 'implementation_plan', 'repository_id': 'exact-repository',
+                                     'target_paths': ['app.py'], 'target_symbols': ['run'],
+                                     'unresolved_evidence': [{'type': 'human_check'}],
+                                     'execution_allowed': False, 'authority_required': 'human_approval_required'},
+                    implementation_targets=[{'role': 'primary_target', 'file_path': 'app.py',
+                                              'qualified_symbol': 'run', 'reasons': ['goal evidence']},
+                                             {'role': 'configuration_target', 'file_path': 'config.py',
+                                              'qualified_symbol': 'load', 'reasons': ['configuration evidence']},
+                                             {'role': 'related_context', 'file_path': 'helper.py',
+                                              'qualified_symbol': 'help', 'reasons': ['related evidence']}],
+                    tests={'selected_tests': [self.identity], 'expected_test_selection': {
+                        'status': 'known', 'confidence': 'developer_selected',
+                        'evidence': [{'test': self.identity, 'source': 'explicit_developer_selection'}],
+                        'uncertainty': ['Runtime coverage requires human review.']}},
+                    preserved_behavior=[{'kind': 'static_dependency', 'statement': 'keep the public return value'}],
+                    implementation_steps=[{'order': 1, 'action': 'inspect target', 'target_refs': ['app.py::run']}],
+                    recommended_validation=[{'order': 1, 'selector': self.identity, 'scope': 'focused',
+                                             'reason': 'bound regression'}],
+                    limitations=['Dynamic behavior requires human validation.'],
+                    unresolved_evidence=[{'type': 'human_check', 'reason': 'inspect runtime behavior'}],
+                    warnings=[{'type': 'visible_warning', 'classification': 'non_blocking',
+                        'evidence': {'file_path': 'tests/test_app.py', 'qualified_name': 'RunTests',
+                                     'reason': 'over_limit', 'token_count': 300},
+                        'basis': {'kind': 'exact_retained_leaf_evidence',
+                            'container': {'file_path': 'tests/test_app.py', 'qualified_symbol': 'RunTests'},
+                            'proofs': [{'kind': 'exact_retained_test_leaf', 'chunk_id': 'exact-chunk',
+                                'file_path': 'tests/test_app.py', 'qualified_symbol': 'RunTests.test_run',
+                                'target_role': 'test_target', 'content_sha256': 'exact-content-hash',
+                                'test_identity': self.identity,
+                                'expected_test_binding_source': 'explicit_developer_selection'}]},
+                        'action': 'backend retained exact leaf'}],
+                    change_impact={'repository': {'repository_id': 'exact-repository',
+                                                   'current_commit': 'exact-commit',
+                                                   'working_tree_sha256': 'exact-snapshot'},
+                                   'index_freshness': {'status': 'current'}})
 
     def scan_payload(self):
         facts = self.app.state.facts
@@ -87,7 +120,15 @@ class UISlice2WidgetTests(GitFixture):
             plan.assert_called_once_with(str(self.repo.resolve()), str(self.workspace_path.resolve()), goal='improve run', top_k=10, expected_tests=())
             result = self.app.state.plan_result
             self.assertIsNotNone(result)
-            self.assertIn(result['run_id'], self.app.view.plan_summary.get('1.0', 'end'))
+            self.assertIn(result['run_id'], self.app.view.plan_header.get())
+            evidence_snapshot = self.snapshot()
+            run_records = sorted(str(path.relative_to(self.workspace_path))
+                                 for path in self.workspace_path.rglob('metadata.json'))
+            self.app.view.render(self.app.state)
+            self.app.view.render(self.app.state)
+            self.assertEqual(evidence_snapshot, self.snapshot())
+            self.assertEqual(run_records, sorted(str(path.relative_to(self.workspace_path))
+                                                 for path in self.workspace_path.rglob('metadata.json')))
         self.assertEqual(before, self.snapshot()[:4])
         self.assertEqual(['Run & Result','History'], [self.app.view.notebook.tab(tab,'text') for tab in self.app.view.notebook.tabs()[2:]])
         self.window.deiconify(); self.window.update()
@@ -126,12 +167,59 @@ class UISlice2WidgetTests(GitFixture):
                 plan.assert_called_once()
             self.assertIs(payload, self.app.state.plan_result)
             text=self.app.view.plan_summary.get('1.0','end')
-            self.assertIn('Primary targets: 1', text)
-            self.assertIn('Configuration targets: 1', text)
+            self.assertIn('Primary target (primary_target): 1', text)
+            self.assertIn('Configuration target (configuration_target): 1', text)
+            self.assertIn('Blocking / unresolved evidence', text)
+            self.assertIn('Warnings / informational evidence', text)
+            self.assertIn('Proposed Action', text)
+            self.assertIn('Proposed scope', text)
+            self.assertIn('execution_allowed: false', text)
+            self.assertNotIn('Approved scope', text)
+            self.assertIn('tests.test_app.RunTests.test_run', text)
+            self.assertIn('exact_retained_test_leaf', text)
+            self.assertIn('exact-content-hash', text)
+            self.assertIn('Proposed implementation steps - no source changes have been made.', text)
+            self.assertIn('Recommended validation (advisory; not executed)', text)
+            self.assertIn('Limitations', text)
             self.assertNotIn('Primary targets: 2', text)
-            for exact in (status,'exact-plan-run','exact-action',self.identity,'Warnings: 1','visible_warning','Unresolved items (backend): 1','human_check'):
+            self.assertIn(f'Plan status: {status}', self.app.view.plan_header.get())
+            for exact in ('exact-action',self.identity,'visible_warning','human_check'):
                 self.assertIn(exact,text)
+            target_ids = self.app.view.target_tree.get_children()
+            self.assertEqual(3, len(target_ids))
+            self.app.view.target_tree.selection_set(target_ids[1])
+            self.app.view.target_tree.event_generate('<<TreeviewSelect>>')
+            self.window.update()
+            detail = self.app.view.target_detail.get('1.0', 'end')
+            self.assertIn('configuration_target', detail)
+            self.assertIn('configuration evidence', detail)
+            self.assertEqual('Phase 65 run ID: exact-plan-run', self.app.view.plan_header.get().splitlines()[2])
             self.assertIsNone(self.app.state.error)
+
+    def test_slice3_has_no_candidate_or_approval_controls_and_large_evidence_scrolls(self):
+        self.open(); self.goal()
+        payload = self.plan_payload()
+        payload['limitations'] = [f'limitation-{index}-' + ('evidence ' * 40) for index in range(80)]
+        with patch.object(self.app.service, 'plan', return_value=payload):
+            self.app.view.plan_button.invoke(); self.wait(lambda: not self.app.state.loading)
+        text = self.app.view.plan_summary.get('1.0', 'end')
+        self.assertIn('limitation-79-', text)
+        self.assertEqual('disabled', str(self.app.view.plan_summary.cget('state')))
+        names = [child.cget('text') for child in self.app.view.plan.winfo_children()
+                 if child.winfo_class() == 'TButton']
+        combined = ' '.join(names).casefold()
+        for forbidden in ('candidate', 'approve', 'validate patch', 'draft patch', 'execute'):
+            self.assertNotIn(forbidden, combined)
+        before = self.snapshot()
+        self.app.view.raw_detail_button.invoke()
+        raw_window = self.app.view.raw_detail_window
+        raw_text = next(child for child in raw_window.winfo_children() if isinstance(child, tk.Text))
+        self.assertEqual('disabled', str(raw_text.cget('state')))
+        self.assertIn('exact_retained_test_leaf', raw_text.get('1.0', 'end'))
+        self.assertEqual(before, self.snapshot())
+        self.goal('a different plan input')
+        self.assertIsNone(self.app.state.plan_result)
+        self.assertFalse(raw_window.winfo_exists())
 
     def test_blank_goal_and_backend_scan_index_plan_errors_are_visible_without_chaining(self):
         self.open()
