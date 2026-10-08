@@ -19,8 +19,12 @@ class ShellView:
         ("aida_version", "AIDA version"), ("source_authority", "AIDA source authority"),
     )
 
-    def __init__(self, root, open_repository, browse_repository, browse_workspace, start_operation, inputs_changed):
+    def __init__(self, root, open_repository, browse_repository, browse_workspace, start_operation, inputs_changed,
+                 confirm_approval, cancel_approval):
         self.rendering = False
+        self.root = root
+        self.confirm_approval, self.cancel_approval = confirm_approval, cancel_approval
+        self.confirmation = None
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=12)
         self.project = ttk.Frame(self.notebook, padding=12)
@@ -124,6 +128,35 @@ class ShellView:
         candidate_panes.add(scope_frame, weight=1)
         self.diff_view = DiffView(candidate_panes)
         candidate_panes.add(self.diff_view, weight=2)
+        self.human_frame = ttk.Frame(review_tabs, padding=6)
+        review_tabs.add(self.human_frame, text='Human decision')
+        self.selected_patch = tk.StringVar(root)
+        self.audit_label = tk.StringVar(root, value='local-developer')
+        self.review_note = tk.StringVar(root)
+        self.human_frame.columnconfigure(1, weight=1)
+        self.human_frame.rowconfigure(6, weight=1)
+        ttk.Label(self.human_frame, text='Selected Phase 67 patch run').grid(row=0, column=0, sticky='w')
+        self.patch_selector = ttk.Combobox(self.human_frame, textvariable=self.selected_patch, state='readonly')
+        self.patch_selector.grid(row=0, column=1, sticky='ew')
+        ttk.Label(self.human_frame, text='Audit label (local label, not authentication)').grid(row=1, column=0, sticky='w')
+        self.audit_entry = ttk.Entry(self.human_frame, textvariable=self.audit_label)
+        self.audit_entry.grid(row=1, column=1, sticky='ew')
+        ttk.Label(self.human_frame, text='Optional review note').grid(row=2, column=0, sticky='w')
+        self.note_entry = ttk.Entry(self.human_frame, textvariable=self.review_note)
+        self.note_entry.grid(row=2, column=1, sticky='ew')
+        decision_buttons = ttk.Frame(self.human_frame)
+        decision_buttons.grid(row=3, column=0, columnspan=2, sticky='w', pady=4)
+        self.review_button = ttk.Button(decision_buttons, text='Review canonical patch', command=lambda: start_operation('review_patch'))
+        self.review_button.pack(side='left')
+        self.approve_button = ttk.Button(decision_buttons, text='APPROVE', command=lambda: start_operation('review_approval'))
+        self.approve_button.pack(side='left', padx=16)
+        self.reject_button = ttk.Button(decision_buttons, text='REJECT', command=lambda: start_operation('decide_reject'))
+        self.reject_button.pack(side='left')
+        ttk.Label(self.human_frame, text='REJECT records an external Phase 68 decision. Review records nothing. Neither action applies a patch or runs tests.\nDistinct historical decisions remain immutable; a later rejection does not revoke an earlier approval.', wraplength=890).grid(row=4, column=0, columnspan=2, sticky='w')
+        self.decision_status = tk.StringVar(root)
+        ttk.Label(self.human_frame, textvariable=self.decision_status, wraplength=890).grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
+        self.decision_details = ScrolledText(self.human_frame, height=10, wrap='word', state='disabled')
+        self.decision_details.grid(row=6, column=0, columnspan=2, sticky='nsew')
         self.plan_header = tk.StringVar(root, value="No plan selected.")
         ttk.Label(self.plan_evidence, textvariable=self.plan_header, justify="left", wraplength=1000).pack(anchor="w", fill="x", pady=4)
         self.raw_detail_button = ttk.Button(self.plan_evidence, text="View raw plan details", command=self.open_raw_plan)
@@ -160,6 +193,10 @@ class ShellView:
                          self.open_button, self.browse_workspace_button, self.refresh_button,
                          self.scan_button, self.index_button, self.goal, self.catalog_button, self.tests, self.plan_button)
         self.controls += (self.raw_detail_button, self.candidate_entry, self.candidate_browse, self.candidate_validate)
+        self.controls += (self.audit_entry, self.note_entry, self.review_button, self.approve_button, self.reject_button)
+        self.selected_patch.trace_add('write', lambda *_: inputs_changed())
+        self.audit_label.trace_add('write', lambda *_: inputs_changed())
+        self.review_note.trace_add('write', lambda *_: inputs_changed())
         self.selected_plan.trace_add('write', lambda *_: inputs_changed())
         self.candidate_path.trace_add('write', lambda *_: inputs_changed())
         self.repository.trace_add("write", lambda *_: inputs_changed())
@@ -180,10 +217,12 @@ class ShellView:
     def _render_candidate(self, state):
         plan = state.plan_result or {}
         self.plan_selector.configure(values=(plan['run_id'],) if plan.get('run_id') else (),
-            state='disabled' if state.loading or state.close_pending else 'readonly')
+            state='disabled' if state.loading or state.close_pending or state.pending_approval else 'readonly')
         self.selected_plan.set(state.selected_plan_run_id)
         self.candidate_path.set(state.candidate_path)
-        result = state.candidate_result
+        result = state.review_result['draft'] if state.review_result else state.candidate_result
+        if state.review_error or (state.loading and state.operation in {'review_patch', 'review_approval'}):
+            result = None
         status = 'Select a completed plan, choose an external candidate, then explicitly validate.'
         status += f"\nSelected Phase 65 run: {state.selected_plan_run_id or 'unavailable'} | Phase 66 action: {plan.get('proposed_action', {}).get('action_id', 'unavailable')}"
         if state.operation == 'import_candidate' and state.loading:
@@ -205,9 +244,89 @@ class ShellView:
             detail += '\n\nActually present in validated candidate\n' + self._row_text({key: result[key] for key in ('candidate_paths', 'candidate_symbol_scope') if key in result})
             if result.get('status') == 'draft':
                 body = result.get('patch_text', '')
-                detail += '\nDisplay-only patch SHA-256: ' + hashlib.sha256(body.encode('utf-8')).hexdigest()
+                if state.review_result:
+                    detail += '\nCanonical patch review digest: ' + state.review_result['patch_sha256']
+                else:
+                    detail += '\nDisplay-only patch SHA-256: ' + hashlib.sha256(body.encode('utf-8')).hexdigest()
         self._replace_text(self.candidate_details, detail)
         self.diff_view.show(body)
+
+    def _render_decision(self, state):
+        locked = state.loading or state.close_pending or state.pending_approval is not None
+        candidate = state.candidate_result or {}
+        self.patch_selector.configure(values=(candidate['run_id'],) if candidate.get('run_id') else (),
+                                      state='disabled' if locked else 'readonly')
+        self.selected_patch.set(state.selected_patch_run_id)
+        submitted = state.decision_result is not None or state.decision_error is not None
+        selected = bool(state.selected_patch_run_id)
+        self.review_button.configure(state='disabled' if locked or not selected else 'normal')
+        self.approve_button.configure(state='disabled' if locked or not selected or submitted or candidate.get('status') != 'draft' else 'normal')
+        self.reject_button.configure(state='disabled' if locked or not selected or submitted else 'normal')
+        message = 'Select the exact Phase 67 run. Approval reloads canonical evidence before confirmation.'
+        details = ''
+        if state.review_result:
+            review = state.review_result
+            details = 'Canonical PatchDraft\n' + self._row_text({key: value for key, value in review['draft'].items() if key != 'patch_text'})
+            details += '\n\nCanonical patch review digest: ' + review['patch_sha256']
+            details += '\nCurrent repository facts\n' + self._row_text(review['facts'])
+            details += '\nBound existing tests: ' + json.dumps(review['bound_tests'] if review['bound_tests'] is not None else 'Unavailable', ensure_ascii=False)
+            details += '\nLinked plan evidence: ' + (review['linked_plan_error'] or
+                ('Available' if review['bound_tests'] is not None else 'Unavailable'))
+            details += '\nPlan warnings\n' + json.dumps(review['plan_warnings'], ensure_ascii=False)
+            message = 'Canonical review loaded. Exact stored diff is in Candidate patch. Review created no run.'
+        if state.pending_approval:
+            message = 'Approval confirmation pending. No decision has been recorded by this review.'
+        if state.decision_result is not None:
+            result = state.decision_result
+            message = ('APPROVED FOR FUTURE EXACT PATCH APPLICATION — NOT APPLIED' if result.get('decision') == 'approve'
+                       else 'PATCH REJECTED — NO EXECUTION AUTHORITY' if result.get('decision') == 'reject' else 'Phase 68 result returned')
+            details += '\n\nPhase 68 AuthorizationRecord (literal backend values)\n' + self._row_text(result)
+            details += '\nApproval authorizes only a later explicit Phase 69 operation with the exact same binding. No arbitrary edits, automatic application or target test execution.'
+        if state.review_error:
+            message = state.review_error
+        if state.decision_error:
+            message = state.decision_error + '\nDecision returned no record; final persistence outcome is unconfirmed. Review explicitly before another deliberate submission.'
+        if state.loading and state.operation in {'review_patch', 'review_approval', 'decide_approve', 'decide_reject'}:
+            message = 'Running ' + state.operation + '…'
+        self.decision_status.set(message)
+        self._replace_text(self.decision_details, details)
+        if self.confirmation and (not state.pending_approval or not state.approval_matches()):
+            self.dismiss_confirmation()
+
+    def open_confirmation(self, context, review):
+        if self.confirmation is not None:
+            return
+        dialog = tk.Toplevel(self.root)
+        self.confirmation = dialog
+        dialog.title('Confirm exact patch approval')
+        dialog.geometry('780x620')
+        dialog.transient(self.root)
+        ttk.Label(dialog, text='You are approving this exact stored patch for possible future application. No files will be changed and no tests will run now.', wraplength=740, padding=10).pack(fill='x')
+        self.confirmation_details = ScrolledText(dialog, wrap='word', height=20)
+        self.confirmation_details.pack(fill='both', expand=True, padx=10)
+        draft = review['draft']
+        text = self._row_text({key: value for key, value in draft.items() if key != 'patch_text'})
+        text += '\nRecorded HEAD: ' + str(draft['current_commit']) + '\nCurrent HEAD: ' + str(review['facts']['head'])
+        text += '\nCanonical patch review digest: ' + review['patch_sha256']
+        text += '\nBound existing tests: ' + json.dumps(review['bound_tests'] if review['bound_tests'] is not None else 'Unavailable', ensure_ascii=False)
+        text += '\nPlan warnings: ' + json.dumps(review['plan_warnings'], ensure_ascii=False)
+        text += '\nAudit label: ' + context.approved_by + '\nOptional note: ' + (context.note or '')
+        self._replace_text(self.confirmation_details, text)
+        buttons = ttk.Frame(dialog, padding=10)
+        buttons.pack(fill='x')
+        self.confirm_button = ttk.Button(buttons, text='Confirm approval', command=lambda: self.confirm_approval(context))
+        self.confirm_button.pack(side='left')
+        self.cancel_button = ttk.Button(buttons, text='Cancel', command=self.cancel_approval)
+        self.cancel_button.pack(side='right')
+        dialog.protocol('WM_DELETE_WINDOW', self.cancel_approval)
+        dialog.grab_set()
+        self.cancel_button.focus_set()
+
+    def dismiss_confirmation(self):
+        if self.confirmation is not None:
+            self.confirmation.grab_release()
+            self.confirmation.destroy()
+            self.confirmation = None
 
     @staticmethod
     def _replace_text(widget, text):
@@ -376,7 +495,7 @@ class ShellView:
 
     def _render(self, state: ViewState):
         for control in self.controls:
-            control.configure(state="disabled" if state.loading or state.close_pending else "normal")
+            control.configure(state="disabled" if state.loading or state.close_pending or state.pending_approval else "normal")
         if not state.loading:
             self.repository.set(state.repository)
             self.workspace.set(state.workspace)
@@ -437,7 +556,7 @@ class ShellView:
             self.tests.delete(0, "end")
             for identity in ids:
                 self.tests.insert("end", identity)
-            self.tests.configure(state="disabled" if state.loading or state.close_pending else "normal")
+            self.tests.configure(state="disabled" if state.loading or state.close_pending or state.pending_approval else "normal")
         self.tests.selection_clear(0, "end")
         for index, identity in enumerate(ids):
             if identity in state.selected_tests:
@@ -447,8 +566,17 @@ class ShellView:
         try:
             self._render_candidate(state)
         except (KeyError, TypeError, ValueError, tk.TclError) as failure:
-            result = state.candidate_result or {}
+            result = (state.review_result or {}).get('draft', state.candidate_result or {}) if not state.review_error else {}
             self.candidate_status.set(f"Phase 67: {result.get('status', 'unavailable')} | Presentation error: {failure}")
             self._replace_text(self.candidate_details, json.dumps({key: value for key, value in result.items() if key != 'patch_text'}, ensure_ascii=False, indent=2))
             body = result.get('patch_text', '') if result.get('status') == 'draft' else ''
             self.diff_view.show(body if isinstance(body, str) else '')
+        try:
+            self._render_decision(state)
+        except (KeyError, TypeError, ValueError, tk.TclError) as failure:
+            # Presentation failures cannot erase an actual backend decision.
+            state.pending_approval = None
+            self.dismiss_confirmation()
+            self.decision_status.set(f'Phase 68 presentation error: {failure}')
+            self._replace_text(self.decision_details, json.dumps(state.decision_result or state.review_result,
+                                                               ensure_ascii=False, indent=2))

@@ -99,3 +99,48 @@ def read_repository(workspace: DeveloperWorkspace, repository: Path) -> dict[str
         "parser_failures": list(parsed.parse_failures),
         "notice": "Read-only snapshot; no AIDA evidence created. Branch is display context only.",
     }
+
+
+def review_patch(workspace: DeveloperWorkspace, repository: Path,
+                 patch_run_id: str) -> dict[str, Any]:
+    """Load canonical review evidence without preparing storage or recording runs."""
+    from .patch_authorization import _read_patch_run, _check_repository
+    from .local_workflow import _digest, scan_local_repository
+    from .execution_verification import _read_run, _proposal
+
+    root = Path(repository).expanduser().resolve(strict=True)
+    workspace._validate_isolation(root)
+    draft = _read_patch_run(workspace, patch_run_id)
+    _, payload = _read_run(workspace, patch_run_id, "patch")
+    if any(payload.get(key) != value for key, value in draft.to_dict().items()):
+        raise LocalWorkflowError("Phase 67 patch changed while review was read; review explicitly again.")
+    _check_repository(draft, scan_local_repository(root), require_state=False)
+    facts = read_repository(workspace, root)
+    bound_tests, plan_error, warnings = None, None, []
+    plan_run_id = payload.get("source_plan_run_id")
+    if plan_run_id:
+        try:
+            metadata, plan = _read_run(workspace, plan_run_id, "plan")
+            proposal = _proposal(plan["proposed_action"])
+            selection = plan["tests"]["expected_test_selection"]
+            if (proposal.action_id != draft.source_action_id
+                    or metadata["repository_id"] != draft.repository_id
+                    or metadata["repository_path"] != draft.repository_path
+                    or proposal.current_commit != draft.current_commit
+                    or proposal.working_tree_sha256 != draft.working_tree_sha256
+                    or selection["status"] != "known"
+                    or selection["selected_tests"] != plan["tests"]["selected_tests"]):
+                raise ValueError("Linked plan/action/test association is unavailable.")
+            bound_tests = list(selection["selected_tests"])
+            warnings = plan.get("warnings", [])
+        except (LocalWorkflowError, KeyError, TypeError, ValueError) as error:
+            plan_error = str(error)
+    return {
+        "draft": {**payload, "run_id": patch_run_id}, "facts": facts,
+        # Existing shared backend SHA-256 primitive; same UTF-8 bytes as Phase 68.
+        "patch_sha256": _digest(draft.patch_text.encode("utf-8")),
+        "state_matches": (facts["head"] == draft.current_commit
+                          and facts["working_tree_sha256"] == draft.working_tree_sha256),
+        "bound_tests": bound_tests, "linked_plan_error": plan_error,
+        "plan_warnings": warnings,
+    }

@@ -36,7 +36,7 @@ class UIServiceTests(GitFixture):
         with patch("src.developer.ui_read.read_repository", side_effect=LocalWorkflowError("exact reason")):
             with self.assertRaisesRegex(LocalWorkflowError, "exact reason"):
                 service.read_repository(str(self.repo), str(self.workspace_path))
-        self.assertEqual(["read_repository", "scan", "index", "catalog_tests", "plan", "import_candidate"], [name for name, value in RepositoryService.__dict__.items()
+        self.assertEqual(["read_repository", "scan", "index", "catalog_tests", "plan", "import_candidate", "review_patch", "decide"], [name for name, value in RepositoryService.__dict__.items()
                                               if not name.startswith("_") and callable(value)])
 
     def test_service_open_and_refresh_do_not_write(self):

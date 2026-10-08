@@ -42,7 +42,7 @@ class UIWorkflowTests(GitFixture):
             self.assertEqual(self.workspace_path.resolve(), developer.root)
             self.assertEqual(self.repo, repo)
             self.assertEqual(dict(goal=goal, top_k=10, expected_tests=(self.identity,)), plan.call_args.kwargs)
-        self.assertEqual({'read_repository', 'scan', 'index', 'catalog_tests', 'plan', 'import_candidate'},
+        self.assertEqual({'read_repository', 'scan', 'index', 'catalog_tests', 'plan', 'import_candidate', 'review_patch', 'decide'},
                          {name for name, value in RepositoryService.__dict__.items() if not name.startswith('_') and callable(value)})
 
     def test_catalog_is_exact_read_only_and_imports_no_target_tests(self):

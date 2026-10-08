@@ -52,3 +52,23 @@ class RepositoryService:
         text = candidate.read_bytes().decode("utf-8")
         return draft_patch(self._workspace(workspace), root, proposal,
                            SuppliedPatchGenerator(text), plan_run_id=plan_run_id)
+
+    def review_patch(self, repository: str, workspace: str, *, patch_run_id: str) -> dict[str, Any]:
+        from src.developer.ui_read import review_patch
+        return review_patch(self._workspace(workspace), Path(repository), patch_run_id)
+
+    def decide(self, repository: str, workspace: str, *, patch_run_id: str,
+               decision: str, approved_by: str, note: str | None,
+               expected_branch: str | None = None) -> dict[str, Any]:
+        from src.developer.patch_authorization import record_patch_decision
+        from src.developer.ui_read import _git_read
+        from src.developer.local_workflow import LocalWorkflowError
+        root = Path(repository).expanduser().resolve(strict=True)
+        developer = self._workspace(workspace)
+        developer._validate_isolation(root)
+        if decision == "approve" and expected_branch is not None:
+            branch = _git_read(root, "rev-parse", "--symbolic-full-name", "HEAD").decode("utf-8", errors="replace").strip()
+            if branch != expected_branch:
+                raise LocalWorkflowError("Repository branch context changed; reload the session and review explicitly.")
+        return record_patch_decision(developer, root, patch_run_id,
+                                     decision, approved_by=approved_by, note=note)

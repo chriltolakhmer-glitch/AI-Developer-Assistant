@@ -21,7 +21,8 @@ class Application:
         root.geometry("980x620")
         root.minsize(780, 540)
         self.view = ShellView(root, self.open_repository, self.browse_repository, self.browse_workspace,
-                              self.start_operation, self.inputs_changed)
+                              self.start_operation, self.inputs_changed,
+                              self.confirm_approval, self.cancel_approval)
         self.view.render(self.state)
         root.protocol("WM_DELETE_WINDOW", self.request_close)
         self.poll_id = root.after(40, self._poll)
@@ -38,6 +39,8 @@ class Application:
         self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"),
                                    self.view.selected_test_ids() if same_session else ())
         self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
+        self.state.patch_inputs(self.view.selected_patch.get())
+        self.state.decision_inputs(self.view.audit_label.get(), self.view.review_note.get() or None)
         self.view.render(self.state)
 
     def start_operation(self, operation: str):
@@ -45,6 +48,8 @@ class Application:
             return
         self.state.planning_inputs(self.view.goal.get("1.0", "end-1c"), self.view.selected_test_ids())
         self.state.candidate_inputs(self.view.candidate_path.get(), self.view.selected_plan.get())
+        self.state.patch_inputs(self.view.selected_patch.get())
+        self.state.decision_inputs(self.view.audit_label.get(), self.view.review_note.get() or None)
         request = self.state.begin_operation(operation, self.view.repository.get(), self.view.workspace.get())
         self.view.render(self.state)
         if request is not None:
@@ -59,6 +64,14 @@ class Application:
             elif request.operation == "import_candidate":
                 facts = self.service.import_candidate(request.repository, request.workspace,
                     plan_run_id=request.plan_run_id, proposal=request.proposal, patch_path=request.patch_path)
+            elif request.operation in {'review_patch', 'review_approval'}:
+                facts = self.service.review_patch(request.repository, request.workspace, patch_run_id=request.patch_run_id)
+            elif request.operation in {'decide_approve', 'decide_reject'}:
+                facts = self.service.decide(request.repository, request.workspace,
+                    patch_run_id=request.patch_run_id,
+                    decision='approve' if request.operation == 'decide_approve' else 'reject',
+                    approved_by=request.approved_by, note=request.note,
+                    expected_branch=request.expected_branch if request.operation == 'decide_approve' else None)
             else:
                 operation = {"read_repository": self.service.read_repository, "scan": self.service.scan,
                              "index": self.service.index, "catalog_tests": self.service.catalog_tests}[request.operation]
@@ -76,8 +89,12 @@ class Application:
             except Empty:
                 break
             try:
-                self.state.complete(request, facts, error)
+                completed = self.state.complete(request, facts, error)
+                if completed and request.operation == 'review_approval' and error is None:
+                    self.state.open_approval(request)
                 self.view.render(self.state)
+                if self.state.pending_approval and self.state.approval_matches():
+                    self.view.open_confirmation(self.state.pending_approval, self.state.review_result)
             except (KeyError, TypeError, ValueError) as failure:
                 self.state.facts = None
                 self.state.plan_result = self.state.scan_result = self.state.index_result = self.state.test_catalog = None
@@ -90,7 +107,7 @@ class Application:
             self.poll_id = self.root.after(40, self._poll)
 
     def browse_repository(self):
-        if self.state.loading or self.state.close_pending:
+        if self.state.loading or self.state.close_pending or self.state.pending_approval:
             return
         chosen = filedialog.askdirectory(parent=self.root, title="Choose an existing Git repository root", mustexist=True)
         if chosen:
@@ -98,7 +115,7 @@ class Application:
             self.open_repository()
 
     def browse_workspace(self):
-        if self.state.loading or self.state.close_pending:
+        if self.state.loading or self.state.close_pending or self.state.pending_approval:
             return
         chosen = filedialog.askdirectory(parent=self.root, title="Choose external AIDA workspace", mustexist=True)
         if chosen:
@@ -106,6 +123,7 @@ class Application:
             self.view.render(self.state)
 
     def request_close(self):
+        self.cancel_approval()
         if self.state.loading or (self.worker is not None and self.worker.is_alive()):
             self.state.close_pending = True
             self.view.render(self.state)
@@ -116,3 +134,21 @@ class Application:
         self.closed = True
         self.root.after_cancel(self.poll_id)
         self.root.destroy()
+
+    def cancel_approval(self):
+        self.state.pending_approval = None
+        self.view.dismiss_confirmation()
+        if not self.closed:
+            self.view.render(self.state)
+
+    def confirm_approval(self, context):
+        if context != self.state.pending_approval:
+            return
+        self.inputs_changed()
+        if not self.state.approval_matches():
+            self.state.pending_approval = None
+            self.state.decision_error = 'Approval confirmation context changed; review explicitly again.'
+            self.view.dismiss_confirmation()
+            self.view.render(self.state)
+            return
+        self.start_operation('decide_approve')
