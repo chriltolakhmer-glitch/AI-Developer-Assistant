@@ -8,25 +8,47 @@ from tkinter import filedialog
 from .service import RepositoryService
 from .state import ReadRequest, ViewState
 from .views import ShellView
+from .preferences import AppearancePreferences
+from .theme import ThemeController, detect_windows_appearance
 
 
 class Application:
-    def __init__(self, root, service: RepositoryService, workspace: Path):
+    def __init__(self, root, service: RepositoryService, workspace: Path, *,
+                 preferences=None, appearance_detector=detect_windows_appearance):
         self.root, self.service = root, service
         self.state = ViewState(workspace=str(workspace.expanduser().resolve()))
         self.results = Queue()
         self.worker: Thread | None = None
         self.closed = False
+        config = service.config
+        self.preferences = preferences if preferences is not None else AppearancePreferences((
+            Path(__file__).resolve().parents[2], config.data_root, config.corpus_root,
+            config.validation_output, config.embedding_model_cache))
+        appearance, self.preference_warning = self.preferences.load()
         root.title("AIDA — Repository status")
-        root.geometry("980x620")
-        root.minsize(780, 540)
+        # Reserve the appearance row without reducing existing review space.
+        root.geometry("980x660")
+        root.minsize(780, 580)
         self.view = ShellView(root, self.open_repository, self.browse_repository, self.browse_workspace,
                               self.start_operation, self.inputs_changed,
                               self.confirm_approval, self.cancel_approval,
-                              self.confirm_apply, self.cancel_apply, self.show_log)
+                              self.confirm_apply, self.cancel_apply, self.show_log, self.change_appearance)
+        self.view.appearance.set(appearance)
+        self.theme = ThemeController(root, mode=appearance, detector=appearance_detector,
+                                     on_change=self._appearance_status)
         self.view.render(self.state)
         root.protocol("WM_DELETE_WINDOW", self.request_close)
         self.poll_id = root.after(40, self._poll)
+
+    def _appearance_status(self, message):
+        self.view.appearance_status.set(message + (' ' + self.preference_warning if self.preference_warning else ''))
+
+    def change_appearance(self):
+        if self.closed:
+            return
+        self.theme.set_mode(self.view.appearance.get())
+        self.preference_warning = self.preferences.save(self.theme.mode, self.view.repository.get())
+        self._appearance_status(self.theme.message)
 
     def open_repository(self):
         self.start_operation("read_repository")
@@ -180,6 +202,7 @@ class Application:
 
     def _destroy(self):
         self.closed = True
+        self.theme.close()
         self.root.after_cancel(self.poll_id)
         self.root.destroy()
 

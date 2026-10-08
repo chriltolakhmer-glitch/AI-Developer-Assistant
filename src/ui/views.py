@@ -2,13 +2,13 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog
-from tkinter.scrolledtext import ScrolledText
 import json
 import hashlib
 
 from .formatters import TARGET_ROLES, format_plan, role_label
 from .state import ViewState
 from .diff_view import DiffView
+from .theme import ThemedScrolledText as ScrolledText
 
 
 class ShellView:
@@ -20,7 +20,8 @@ class ShellView:
     )
 
     def __init__(self, root, open_repository, browse_repository, browse_workspace, start_operation, inputs_changed,
-                 confirm_approval, cancel_approval, confirm_apply=None, cancel_apply=None, show_log=None):
+                 confirm_approval, cancel_approval, confirm_apply=None, cancel_apply=None, show_log=None,
+                 appearance_changed=None):
         self.rendering = False
         self.root = root
         self.confirm_approval, self.cancel_approval = confirm_approval, cancel_approval
@@ -28,6 +29,17 @@ class ShellView:
         self.confirm_apply, self.cancel_apply = confirm_apply, cancel_apply
         self.show_log = show_log
         self.apply_confirmation = None
+        appearance_bar = ttk.Frame(root, padding=(12, 4))
+        appearance_bar.pack(fill='x')
+        ttk.Label(appearance_bar, text='Appearance').pack(side='left')
+        self.appearance = tk.StringVar(root, value='System')
+        self.appearance_selector = ttk.Combobox(appearance_bar, textvariable=self.appearance,
+                                               values=('Light', 'Dark', 'System'), state='readonly', width=8)
+        self.appearance_selector.pack(side='left', padx=8)
+        self.appearance_selector.bind('<<ComboboxSelected>>', lambda _event: appearance_changed()
+                                      if appearance_changed else None)
+        self.appearance_status = tk.StringVar(root)
+        ttk.Label(appearance_bar, textvariable=self.appearance_status, wraplength=650).pack(side='left')
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=12)
         self.project = ttk.Frame(self.notebook, padding=12)

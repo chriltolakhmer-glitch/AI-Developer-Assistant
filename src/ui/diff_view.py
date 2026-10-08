@@ -3,6 +3,8 @@ import re
 import tkinter as tk
 from tkinter import ttk
 
+from .theme import LIGHT
+
 
 def line_labels(text):
     old = new = None
@@ -42,10 +44,10 @@ class DiffView(ttk.Frame):
         horizontal = ttk.Scrollbar(self, orient='horizontal', command=self.text.xview)
         horizontal.grid(row=2, column=1, sticky='ew')
         self.text.configure(xscrollcommand=horizontal.set, yscrollcommand=self._position)
-        self.text.tag_configure('addition', foreground='#136b20')
-        self.text.tag_configure('deletion', foreground='#a02020')
-        self.text.tag_configure('heading', foreground='#174a8b')
-        self.text.tag_configure('hunk', foreground='#654080')
+        self.text.tag_configure('addition', foreground=LIGHT['addition'], background=LIGHT['addition_bg'])
+        self.text.tag_configure('deletion', foreground=LIGHT['deletion'], background=LIGHT['deletion_bg'])
+        self.text.tag_configure('heading', foreground=LIGHT['focus'])
+        self.text.tag_configure('hunk', foreground=LIGHT['muted'])
         self.stored_text = ''
 
     def _scroll(self, *args):
