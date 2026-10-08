@@ -176,7 +176,8 @@ class ShellView:
             tests = plan["tests"]["selected_tests"]
             summary = (f"Status: {plan['status']}\nRun: {plan['run_id']}\n"
                        f"Proposal/action: {plan.get('proposed_action', {}).get('action_id', 'unavailable')}\n"
-                       f"Goal: {plan['goal']}\nPrimary targets: {sum(row['role'] in {'primary_target', 'configuration_target'} for row in plan['implementation_targets'])}\n"
+                       f"Goal: {plan['goal']}\nPrimary targets: {sum(row['role'] == 'primary_target' for row in plan['implementation_targets'])}\n"
+                       f"Configuration targets: {sum(row['role'] == 'configuration_target' for row in plan['implementation_targets'])}\n"
                        f"Affected/bound existing tests: {len(tests)}\n" + "\n".join(tests) +
                        f"\nUnresolved items (backend): {len(plan['unresolved_evidence'])}\n" +
                        ", ".join(row['type'] for row in plan['unresolved_evidence']) +

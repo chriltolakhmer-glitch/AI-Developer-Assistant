@@ -52,7 +52,8 @@ class UISlice2WidgetTests(GitFixture):
 
     def plan_payload(self, status='completed'):
         return dict(status=status, run_id='exact-plan-run', goal='goal', proposed_action={'action_id': 'exact-action'},
-                    implementation_targets=[{'role': 'primary_target'}], tests={'selected_tests': [self.identity]},
+                    implementation_targets=[{'role': 'primary_target'}, {'role': 'configuration_target'},
+                                            {'role': 'related_target'}], tests={'selected_tests': [self.identity]},
                     unresolved_evidence=[{'type': 'human_check'}], warnings=[{'type': 'visible_warning'}],
                     change_impact={'index_freshness': {'status': 'current'}})
 
@@ -125,6 +126,9 @@ class UISlice2WidgetTests(GitFixture):
                 plan.assert_called_once()
             self.assertIs(payload, self.app.state.plan_result)
             text=self.app.view.plan_summary.get('1.0','end')
+            self.assertIn('Primary targets: 1', text)
+            self.assertIn('Configuration targets: 1', text)
+            self.assertNotIn('Primary targets: 2', text)
             for exact in (status,'exact-plan-run','exact-action',self.identity,'Warnings: 1','visible_warning','Unresolved items (backend): 1','human_check'):
                 self.assertIn(exact,text)
             self.assertIsNone(self.app.state.error)
